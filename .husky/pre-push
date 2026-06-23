@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "Rodando ai:disable antes de enviar para o Github..."
+npm run ai:disable

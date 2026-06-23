@@ -1,0 +1,10 @@
+import { create } from "zustand";
+export type AiConfig = any;
+export type AiProvider = any;
+export type AiMessage = any;
+export type DmAiRule = { id: string; enabled: boolean; label: string; };
+export type AiAutoReplyRule = { id: string; account_id: string; channel_id: string; enabled: boolean; };
+export const useAiStore: any = create(() => ({ rules: [] as AiAutoReplyRule[], dmRules: [] as DmAiRule[], handleIncomingDm: () => {}, setDmRule: () => {}, removeDmRule: () => {}, toggleDmRule: () => {}, addRule: () => {}, toggleRule: () => {}, globalConfig: {} }));
+export const makeDefaultConfig: any = () => ({});
+export const OPENROUTER_MODELS: any = [];
+export const GOOGLE_MODELS: any = [];

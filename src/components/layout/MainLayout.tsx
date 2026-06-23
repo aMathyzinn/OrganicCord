@@ -30,7 +30,7 @@ export function MainLayout({ onAddAccount }: Props) {
   const { fetchDMs, cache } = useDiscordStore();
 
   const hasConvsInChannel = activeChannelId
-    ? conversations.some((c) => c.channel_id === activeChannelId)
+    ? conversations.some((c: any) => c.channel_id === activeChannelId)
     : false;
 
   const activeChannel = activeGuildId && activeChannelId 
