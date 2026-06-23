@@ -1,0 +1,315 @@
+/* ============================================================
+   OrganicCord — Design Tokens e Reset Global
+   Paleta baseada no Discord com refinamentos próprios
+   ============================================================ */
+
+:root {
+  /* Backgrounds */
+  --bg-primary: #313338;
+  --bg-secondary: #2b2d31;
+  --bg-tertiary: #1e1f22;
+  --bg-accent: #404249;
+  --bg-float: #111214;
+  --bg-message-hover: rgba(4, 4, 5, 0.07);
+
+  /* Text */
+  --text-normal: #dbdee1;
+  --text-muted: #949ba4;
+  --text-link: #00a8fc;
+  --text-positive: #23a55a;
+  --text-warning: #f0b232;
+  --text-danger: #f23f43;
+  --text-brand: #5865f2;
+
+  /* Interactive */
+  --interactive-normal: #b5bac1;
+  --interactive-hover: #dbdee1;
+  --interactive-active: #ffffff;
+  --interactive-muted: #41434a;
+
+  /* Brand */
+  --brand-500: #5865f2;
+  --brand-560: #4752c4;
+  --brand-600: #3c45a5;
+
+  /* Status */
+  --status-online: #23a55a;
+  --status-idle: #f0b232;
+  --status-dnd: #f23f43;
+  --status-offline: #80848e;
+  --status-danger: #ed4245;
+
+  /* Misc */
+  --scrollbar-thin: #1e1f22;
+  --scrollbar-thumb: #2b2d31;
+  --channel-icon: #80848e;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  /* Radius */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.5);
+}
+
+/* --- Reset --- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: 'gg sans', 'Noto Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.375;
+  color: var(--text-normal);
+  background: var(--bg-tertiary);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* --- Scrollbar customizada --- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thin);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb);
+}
+
+/* --- Links --- */
+a {
+  color: var(--text-link);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+/* --- Inputs --- */
+input, textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--text-normal);
+  background: var(--bg-tertiary);
+  border: none;
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* --- Focus visible --- */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+  border-radius: var(--radius-xs);
+}
+
+/* --- Selects --- */
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--text-normal);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+/* Permite selecionar texto nas áreas de chat */
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+/* --- Animações globais --- */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-8px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(24px) scale(0.95); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to   { opacity: 0; transform: translateX(24px) scale(0.95); }
+}
+
+/* --- Utilitários --- */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fade-in {
+  animation: fadeIn 150ms ease-out;
+}
+
+/* --- Interactive hover utilities --- */
+.hoverable {
+  transition: background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out, opacity 120ms ease-out;
+  cursor: pointer;
+}
+
+.hoverable:hover {
+  background: var(--bg-accent);
+}
+
+.hoverable-subtle:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* --- Interactive element base --- */
+.interactive {
+  transition: all 120ms ease-out;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--interactive-normal);
+}
+
+.interactive:hover {
+  color: var(--interactive-hover);
+  background: var(--bg-accent);
+}
+
+.interactive:active {
+  color: var(--interactive-active);
+}
+
+/* --- Hover background utilities --- */
+.hover-bg-accent { transition: background 120ms ease-out; }
+.hover-bg-accent:hover { background: var(--bg-accent); }
+
+.hover-bg-subtle { transition: background 120ms ease-out; }
+.hover-bg-subtle:hover { background: rgba(255, 255, 255, 0.06); }
+
+.hover-brand-dark { transition: background 150ms ease-out; }
+.hover-brand-dark:hover { background: var(--brand-560); }
+
+/* --- Hover color utilities --- */
+.hover-color-normal { transition: color 120ms ease-out; }
+.hover-color-normal:hover { color: var(--text-normal); }
+
+.hover-color-hover { transition: color 120ms ease-out; }
+.hover-color-hover:hover { color: var(--interactive-hover); }
+
+/* --- Hover border utilities --- */
+.hover-border-muted { transition: border-color 150ms ease-out; }
+.hover-border-muted:hover { border-color: var(--text-muted); }
+
+.hover-border-brand { transition: border-color 150ms ease-out; }
+.hover-border-brand:hover { border-color: var(--brand-500); }
+
+/* --- Hover underline (for links) --- */
+.hover-underline { text-decoration: none; transition: text-decoration 120ms; }
+.hover-underline:hover { text-decoration: underline; }
+
+/* --- Hover danger background --- */
+.hover-danger-bg { transition: background 120ms ease-out; }
+.hover-danger-bg:hover { background: rgba(237, 66, 69, 0.15); }
+
+/* --- Account pill hover (Discord-style circle → rounded square) --- */
+.account-pill {
+  transition: border-radius 200ms ease-out, background 150ms ease-out;
+}
+.account-pill:hover {
+  border-radius: var(--radius-md);
+}
+
+/* --- Add account button hover --- */
+.add-account-btn {
+  transition: background 150ms ease-out, color 150ms ease-out, border-radius 200ms ease-out;
+  color: var(--status-online);
+}
+.add-account-btn:hover {
+  background: var(--status-online);
+  color: #fff;
+  border-radius: var(--radius-md);
+}
+
+/* --- Title bar button base --- */
+.titlebar-btn {
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+.titlebar-btn:hover {
+  color: #fff;
+}
+
+/* --- Cancel reply button --- */
+.cancel-reply-btn {
+  transition: color 120ms ease-out;
+}
+.cancel-reply-btn:hover {
+  color: var(--text-normal);
+}
+
+.dm-button {
+  background: transparent;
+}
+
+.dm-button .close-dm-btn {
+  opacity: 0;
+}
+
+.dm-button:hover .close-dm-btn {
+  opacity: 1 !important;
+}
+
+.dm-button .close-dm-btn:hover {
+  color: var(--text-normal) !important;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+
+/* Header Icon Buttons */
+.header-icon-button {
+  color: var(--interactive-normal);
+  transition: color 0.15s ease-out;
+}
+.header-icon-button:hover:not(:disabled) {
+  color: var(--interactive-hover);
+}
+.header-icon-button:active:not(:disabled) {
+  color: var(--interactive-active);
+}
+

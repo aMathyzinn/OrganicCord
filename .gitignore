@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+dist/
+dist-ssr/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Build
+*.local
+.DS_Store
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Env
+.env
+.env.local
+.env.production
+
+# Store (contém dados sensíveis — não commitar em produção)
+*.json.bak
+
+# AI and Internal Documentation/Tests
+.agents/
+ROADMAP.md
+projectinformation.md
+dave-rust-poc/
+scratch_test.js
+test_ws.js
+test_ws2.js
+test_ws_rsa.js
+.local-ai/
