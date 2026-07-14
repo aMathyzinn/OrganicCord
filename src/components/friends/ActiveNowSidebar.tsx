@@ -74,6 +74,7 @@ export function ActiveNowSidebar() {
               userId={user.id}
               avatarHash={user.avatar}
               status={presence.status}
+              activity={activity}
             />
           );
         })}
@@ -102,7 +103,7 @@ export function ActiveNowSidebar() {
   );
 }
 
-function ActiveCard({ username, description, userId, avatarHash, status }: { username: string; description: string; userId: string; avatarHash: string | null; status: string }) {
+function ActiveCard({ username, description, userId, avatarHash, status, activity }: { username: string; description: string; userId: string; avatarHash: string | null; status: string; activity?: any }) {
   return (
     <div
       style={{
@@ -138,7 +139,7 @@ function ActiveCard({ username, description, userId, avatarHash, status }: { use
             style={{ background: "var(--bg-tertiary)" }}
           />
         </div>
-        <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", flex: 1 }}>
           <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-normal)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {username}
           </span>
@@ -146,6 +147,17 @@ function ActiveCard({ username, description, userId, avatarHash, status }: { use
             {description}
           </span>
         </div>
+        
+        {activity?.assets?.large_image && (
+          <div style={{ width: 32, height: 32, borderRadius: "var(--radius-sm)", overflow: "hidden", flexShrink: 0 }}>
+             <img 
+               src={activity.assets.large_image.startsWith('mp:') ? `https://media.discordapp.net/${activity.assets.large_image.replace('mp:', '')}` : `https://cdn.discordapp.com/app-assets/${activity.application_id}/${activity.assets.large_image}.png`}
+               alt=""
+               style={{ width: "100%", height: "100%", objectFit: "cover" }}
+               onError={(e) => (e.currentTarget.style.display = 'none')}
+             />
+          </div>
+        )}
       </div>
     </div>
   );

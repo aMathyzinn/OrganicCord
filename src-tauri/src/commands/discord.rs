@@ -34,6 +34,8 @@ pub struct DiscordChannel {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiscordMessage {
     pub id: String,
+    pub channel_id: Option<String>,
+    pub guild_id: Option<String>,
     pub content: String,
     pub author: DiscordUser,
     pub timestamp: String,
@@ -140,6 +142,54 @@ pub async fn get_guilds(
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
     retry_get(&client, "https://discord.com/api/v10/users/@me/guilds?with_counts=false").await
+}
+
+#[tauri::command]
+pub async fn get_recent_mentions(
+    account_id: String,
+    app: tauri::AppHandle,
+) -> Result<Vec<DiscordMessage>, String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    // The Discord API endpoint for recent mentions
+    retry_get(&client, "https://discord.com/api/v10/users/@me/mentions?limit=25").await
+}
+
+#[tauri::command]
+pub async fn get_auth_sessions(
+    account_id: String,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    retry_get(&client, "https://discord.com/api/v10/auth/sessions").await
+}
+
+#[tauri::command]
+pub async fn revoke_auth_session(
+    account_id: String,
+    session_id_hash: String,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    let url = format!("https://discord.com/api/v10/auth/sessions/{}", session_id_hash);
+    
+    // As the API uses POST with a specific payload to revoke or sometimes DELETE.
+    // Based on standard discord API, revocation is done via POST to auth/sessions/<id> or DELETE.
+    // Testing reveals it is a DELETE.
+    let response = client
+        .delete(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let err_text = response.text().await.unwrap_or_default();
+        return Err(format!("Falha ao revogar sessão: {}", err_text));
+    }
+
+    Ok(serde_json::json!({ "status": "success" }))
 }
 
 #[tauri::command]
@@ -303,6 +353,53 @@ pub async fn send_message_with_attachment(
 
     let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
     retry_post_multipart(&client, &url, form).await
+}
+
+#[tauri::command]
+pub async fn edit_message(
+    account_id: String,
+    channel_id: String,
+    message_id: String,
+    content: String,
+    app: tauri::AppHandle,
+) -> Result<DiscordMessage, String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    let url = format!("https://discord.com/api/v10/channels/{}/messages/{}", channel_id, message_id);
+    
+    let payload = serde_json::json!({ "content": content });
+    
+    let res = client.patch(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to edit message: {}", e))?;
+        
+    let text = res.text().await.unwrap_or_default();
+    serde_json::from_str(&text).map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn delete_message(
+    account_id: String,
+    channel_id: String,
+    message_id: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    let url = format!("https://discord.com/api/v10/channels/{}/messages/{}", channel_id, message_id);
+    
+    let res = client.delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to delete message: {}", e))?;
+        
+    if res.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("Error deleting message: {}", res.status()))
+    }
 }
 
 #[tauri::command]

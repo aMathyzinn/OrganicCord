@@ -4,6 +4,8 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import { useAccountStore } from "@/stores/accountStore";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { useVoiceStore } from "@/stores/voiceStore";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { AddAccountModal } from "@/components/auth/AddAccountModal";
 import { TitleBar } from "@/components/layout/TitleBar";
@@ -40,7 +42,8 @@ export default function App() {
         }
 
         // Notification logic
-        if (!isFromMe && (hasMention || !message.guild_id)) {
+        const settings = useSettingsStore.getState().settings;
+        if (settings.desktopNotifications && !isFromMe && (hasMention || !message.guild_id)) {
           if (!document.hasFocus() || activeChannelId !== message.channel_id || activeAccountId !== account_id) {
             (async () => {
               try {
@@ -121,6 +124,7 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
+      await useSettingsStore.getState().loadSettings();
       await loadAccounts();
       setInitializing(false);
     })();
@@ -141,16 +145,34 @@ export default function App() {
     }
   }, [initializing, accounts.length]);
 
-  // Ctrl+Shift+. toggles stealth mode
+  // Keybinds Globais
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // e.code is layout-independent; Period key is "Period" regardless of shift state
+      // Ctrl+Shift+. toggles stealth mode
       if (e.ctrlKey && e.shiftKey && (e.code === "Period" || e.key === "." || e.key === ">")) {
         e.preventDefault();
         e.stopPropagation();
         toggleStealth();
         const isStealth = useAccountStore.getState().stealthMode;
         toast.info(isStealth ? "Modo furtivo ativado" : "Modo furtivo desativado");
+      }
+      
+      // Ctrl+Shift+M toggles Mute
+      if (e.ctrlKey && e.shiftKey && (e.code === "KeyM" || e.key === "m" || e.key === "M")) {
+        e.preventDefault();
+        e.stopPropagation();
+        useVoiceStore.getState().toggleMute();
+        const isMuted = useVoiceStore.getState().isMuted;
+        toast.info(isMuted ? "Microfone mutado" : "Microfone desmutado");
+      }
+      
+      // Ctrl+Shift+D toggles Deafen
+      if (e.ctrlKey && e.shiftKey && (e.code === "KeyD" || e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        e.stopPropagation();
+        useVoiceStore.getState().toggleDeafen();
+        const isDeafened = useVoiceStore.getState().isDeafened;
+        toast.info(isDeafened ? "Áudio ensurdecido" : "Áudio desensurdecido");
       }
     };
     document.addEventListener("keydown", handler, true);

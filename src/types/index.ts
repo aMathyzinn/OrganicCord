@@ -131,6 +131,8 @@ export interface DiscordPresence {
 
 export interface DiscordMessage {
   id: string;
+  channel_id?: string;
+  guild_id?: string;
   content: string;
   author: DiscordUser;
   timestamp: string;
@@ -145,8 +147,8 @@ export interface DiscordMessage {
     participants: string[];
     ended_timestamp?: string | null;
   };
-  poll?: any;
-  components?: any[];
+  poll?: DiscordPoll;
+  components?: Record<string, unknown>[];
 }
 
 export interface Attachment {
@@ -208,4 +210,73 @@ export interface AppNotification {
   read: boolean;
 }
 
+export interface DiscordThread {
+  id: string;
+  parent_id: string;
+  name: string;
+}
+
+export interface DiscordPollAnswer {
+  answer_id: number;
+  poll_media: {
+    text?: string;
+    emoji?: {
+      id: string | null;
+      name: string;
+    };
+  };
+}
+
+export interface DiscordPollResult {
+  answer_counts: { id: number; count: number; me_voted: boolean }[];
+  is_finalized: boolean;
+}
+
+export interface DiscordPoll {
+  question: { text: string };
+  answers: DiscordPollAnswer[];
+  expiry: string;
+  allow_multiselect: boolean;
+  layout_type: number;
+  results?: DiscordPollResult;
+}
+
 export type UserStatus = "online" | "idle" | "dnd" | "invisible";
+
+export interface DiscordEmoji {
+  id: string | null;
+  name: string | null;
+  roles?: string[];
+  user?: DiscordUser;
+  require_colons?: boolean;
+  managed?: boolean;
+  animated?: boolean;
+  available?: boolean;
+}
+
+export interface DiscordRole {
+  id: string;
+  name: string;
+  color: number;
+  hoist: boolean;
+  icon?: string | null;
+  unicode_emoji?: string | null;
+  position: number;
+  permissions: string;
+  managed: boolean;
+  mentionable: boolean;
+}
+
+export interface DiscordMember {
+  user?: DiscordUser;
+  nick?: string | null;
+  avatar?: string | null;
+  roles: string[];
+  joined_at: string;
+  premium_since?: string | null;
+  deaf: boolean;
+  mute: boolean;
+  pending?: boolean;
+  permissions?: string;
+  communication_disabled_until?: string | null;
+}

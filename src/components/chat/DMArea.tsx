@@ -23,7 +23,7 @@ interface Props {
 }
 
 export function DMArea({ channelId, accountId }: Props) {
-  const { cache, loading, fetchMessages, fetchMoreMessages, sendMessage, fetchDMs } =
+  const { cache, loading, fetchMessages, fetchMoreMessages, sendMessage, fetchDMs, deleteMessage } =
     useDiscordStore();
   const { accounts } = useAccountStore();
   const { dmRules } = useAiStore();
@@ -257,6 +257,7 @@ export function DMArea({ channelId, accountId }: Props) {
               currentUserId={account?.user_id ?? ""}
               onLoadMore={() => fetchMoreMessages(accountId, channelId)}
               onReply={setReplyingTo}
+              onDelete={(messageId) => deleteMessage(accountId, channelId, messageId)}
             />
           </div>
 

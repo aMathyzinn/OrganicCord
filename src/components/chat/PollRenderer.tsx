@@ -1,32 +1,8 @@
 import { Check, BarChart3 } from "lucide-react";
-
-interface PollAnswer {
-  answer_id: number;
-  poll_media: {
-    text?: string;
-    emoji?: {
-      id: string | null;
-      name: string;
-    };
-  };
-}
-
-interface PollResult {
-  answer_counts: { id: number; count: number; me_voted: boolean }[];
-  is_finalized: boolean;
-}
-
-export interface Poll {
-  question: { text: string };
-  answers: PollAnswer[];
-  expiry: string;
-  allow_multiselect: boolean;
-  layout_type: number;
-  results?: PollResult;
-}
+import type { DiscordPoll } from "@/types";
 
 interface Props {
-  poll: Poll;
+  poll: DiscordPoll;
 }
 
 export function PollRenderer({ poll }: Props) {

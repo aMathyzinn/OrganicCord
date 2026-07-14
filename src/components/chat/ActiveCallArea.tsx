@@ -21,7 +21,22 @@ interface AudioDevice {
 export function ActiveCallArea({ recipient }: Props) {
   const { leaveCall, isMuted, isDeafened, toggleMute, toggleDeafen, inputDeviceId, setInputDevice, isConnecting, isConnected, accountId } = useVoiceStore();
   const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [isRinging, setIsRinging] = useState(true);
+  const [noAnswer, setNoAnswer] = useState(false);
   const currentAccount = useAccountStore(state => state.accounts.find(a => a.id === accountId));
+
+  useEffect(() => {
+    // Simulador de chamada (Ringing) - toca por 20 segundos
+    setIsRinging(true);
+    setNoAnswer(false);
+    
+    const timeout = setTimeout(() => {
+      setIsRinging(false);
+      setNoAnswer(true);
+    }, 20000);
+
+    return () => clearTimeout(timeout);
+  }, [recipient.id]);
 
   useEffect(() => {
     invoke<AudioDevice[]>("get_audio_devices")
@@ -50,13 +65,28 @@ export function ActiveCallArea({ recipient }: Props) {
       <div style={{ position: "absolute", top: 16, left: 24, display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{
           width: 8, height: 8, borderRadius: "50%",
-          background: isConnected ? "var(--status-online)" : "var(--status-idle)",
-          boxShadow: isConnected ? "0 0 8px var(--status-online)" : "none"
+          background: isConnected && !isRinging ? "var(--status-online)" : "var(--status-idle)",
+          boxShadow: isConnected && !isRinging ? "0 0 8px var(--status-online)" : "none",
+          animation: isRinging ? "pulse 1.5s infinite" : "none"
         }} />
-        <span style={{ fontSize: 13, color: isConnected ? "var(--status-online)" : "var(--status-idle)", fontWeight: 600, textTransform: "uppercase" }}>
-          {isConnected ? "Voz Conectada" : isConnecting ? "Conectando..." : "Desconectado"}
+        <span style={{ fontSize: 13, color: isConnected && !isRinging ? "var(--status-online)" : "var(--status-idle)", fontWeight: 600, textTransform: "uppercase" }}>
+          {isRinging ? "Chamando..." : isConnected ? "Voz Conectada" : isConnecting ? "Conectando..." : "Desconectado"}
         </span>
       </div>
+
+      <style>
+        {`
+          @keyframes callPulse {
+            0% { opacity: 0.8; transform: scale(0.98); }
+            50% { opacity: 0.4; transform: scale(1.02); filter: brightness(0.7); }
+            100% { opacity: 0.8; transform: scale(0.98); }
+          }
+          .ringing-avatar {
+            animation: callPulse 2s infinite ease-in-out;
+            filter: brightness(0.6);
+          }
+        `}
+      </style>
 
       <div style={{ display: "flex", alignItems: "center", gap: 32, marginBottom: 24, marginTop: 16 }}>
         {/* Local User */}
@@ -69,7 +99,7 @@ export function ActiveCallArea({ recipient }: Props) {
               transition: "border-color 0.2s"
             }}>
               <Avatar
-                userId={currentAccount.id}
+                userId={currentAccount.user_id}
                 avatarHash={currentAccount.avatar}
                 username={currentAccount.username}
                 size={96}
@@ -80,18 +110,22 @@ export function ActiveCallArea({ recipient }: Props) {
         )}
 
         {/* Recipient User */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-          <div style={{ padding: 4, borderRadius: "50%", border: "2px solid transparent" }}>
-            <Avatar
-              userId={recipient.id}
-              avatarHash={recipient.avatar ?? null}
-              avatarDecoration={recipient.avatar_decoration_data}
-              username={recipient.username}
-              size={96}
-            />
+        {!noAnswer && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+            <div className={isRinging ? "ringing-avatar" : ""} style={{ padding: 4, borderRadius: "50%", border: "2px solid transparent", transition: "all 0.3s" }}>
+              <Avatar
+                userId={recipient.id}
+                avatarHash={recipient.avatar ?? null}
+                avatarDecoration={recipient.avatar_decoration_data}
+                username={recipient.username}
+                size={96}
+              />
+            </div>
+            <span style={{ fontSize: 15, color: isRinging ? "var(--text-muted)" : "#fff", fontWeight: 600, transition: "color 0.3s" }}>
+              {recipient.global_name ?? recipient.username}
+            </span>
           </div>
-          <span style={{ fontSize: 15, color: "#fff", fontWeight: 600 }}>{recipient.global_name ?? recipient.username}</span>
-        </div>
+        )}
       </div>
 
       {/* Control Bar */}

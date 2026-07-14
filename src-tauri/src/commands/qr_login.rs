@@ -155,7 +155,7 @@ async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
                     op: "init".into(),
                     encoded_public_key: pub_b64.clone(),
                 })?;
-                ws.send(Message::Text(init.into())).await?;
+                ws.send(Message::Text(init)).await?;
             }
 
             "init" => {
@@ -180,7 +180,7 @@ async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
                     op: "nonce_proof".into(),
                     proof,
                 })?;
-                ws.send(Message::Text(reply.into())).await?;
+                ws.send(Message::Text(reply)).await?;
             }
 
             // Server responds with fingerprint (what goes in the QR URL)
@@ -231,7 +231,7 @@ async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
                         .and_then(|t| t.as_str())
                         .ok_or_else(|| anyhow::anyhow!("Response missing encrypted_token"))?;
                         
-                    let enc = B64.decode(&enc_b64)?;
+                    let enc = B64.decode(enc_b64)?;
                     let padding = Oaep::new::<Sha256>();
                     let token_bytes = private_key.decrypt(padding, &enc)
                         .map_err(|_| anyhow::anyhow!("RSA decrypt failed for token from ticket"))?;
