@@ -4,7 +4,8 @@ import { fetchUserProfile } from "@/lib/tauri";
 import { Avatar } from "@/components/ui/Avatar";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useProfileStore } from "@/stores/profileStore";
-import { Loader2 } from "lucide-react";
+import { useDiscordStore } from "@/stores/discordStore";
+import { Loader2, Gamepad2 } from "lucide-react";
 import { DiscordText } from "@/components/ui/DiscordText";
 
 export function UserProfilePopover({
@@ -19,6 +20,10 @@ export function UserProfilePopover({
   const [loading, setLoading] = useState(false);
   const { activeAccountId } = useNavigationStore();
   const { openProfile } = useProfileStore();
+  const { cache } = useDiscordStore();
+  
+  const presence = activeAccountId ? cache.presences[activeAccountId]?.[userId] : null;
+  const activities = presence?.activities || [];
 
   useEffect(() => {
     if (open && activeAccountId && !profile && !loading) {
@@ -145,6 +150,53 @@ export function UserProfilePopover({
                     <div style={{ fontSize: 14, color: "var(--text-normal)", lineHeight: 1.4 }}>
                       <DiscordText content={profile.user_profile.bio} />
                     </div>
+                  </div>
+                )}
+                
+                {activities.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-normal)", textTransform: "uppercase" }}>
+                      Atividade
+                    </div>
+                    {activities.map((activity, index) => (
+                      <div key={index} style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                        <div style={{ width: 48, height: 48, borderRadius: "var(--radius-md)", background: "var(--bg-tertiary)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                           {activity.assets?.large_image ? (
+                             <img 
+                               src={activity.assets.large_image.startsWith('mp:') ? `https://media.discordapp.net/${activity.assets.large_image.replace('mp:', '')}` : `https://cdn.discordapp.com/app-assets/${activity.application_id}/${activity.assets.large_image}.png`}
+                               alt={activity.name}
+                               style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "var(--radius-md)" }}
+                               onError={(e) => (e.currentTarget.style.display = 'none')}
+                             />
+                           ) : (
+                             <Gamepad2 size={24} color="var(--text-muted)" />
+                           )}
+                           {activity.assets?.small_image && (
+                             <img 
+                               src={activity.assets.small_image.startsWith('mp:') ? `https://media.discordapp.net/${activity.assets.small_image.replace('mp:', '')}` : `https://cdn.discordapp.com/app-assets/${activity.application_id}/${activity.assets.small_image}.png`}
+                               style={{ position: "absolute", bottom: -4, right: -4, width: 20, height: 20, borderRadius: "50%", border: "2px solid var(--bg-floating)" }}
+                               alt=""
+                               onError={(e) => (e.currentTarget.style.display = 'none')}
+                             />
+                           )}
+                        </div>
+                        <div style={{ flex: 1, overflow: "hidden" }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-normal)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {activity.name}
+                          </div>
+                          {activity.details && (
+                            <div style={{ fontSize: 13, color: "var(--text-normal)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {activity.details}
+                            </div>
+                          )}
+                          {activity.state && (
+                            <div style={{ fontSize: 13, color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {activity.state}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
                 

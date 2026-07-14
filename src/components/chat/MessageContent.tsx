@@ -41,7 +41,7 @@ type Node =
   | { t: "channel";  name: string }       // #channel
   | { t: "emoji";    name: string; id: string; animated: boolean }
   | { t: "link";     url: string }
-  | { t: "markdownlink"; text: string; url: string };
+  | { t: "markdownlink"; children: Node[]; url: string };
 
 // ─── Renderer ────────────────────────────────────────────────────────────────
 
@@ -227,8 +227,9 @@ function renderNode(
           rel="noreferrer"
           className="hover-underline"
           style={{ color: "var(--text-link)", textDecoration: "none" }}
+          title={node.url}
         >
-          {node.text}
+          {ch(node.children)}
         </a>
       );
 
@@ -457,7 +458,7 @@ function parseSpans(text: string, channelMap: Map<string, string>, roleMap: Map<
     } else if (codeContent !== undefined) {
       nodes.push({ t: "code", v: codeContent });
     } else if (mdLinkUrl !== undefined) {
-      nodes.push({ t: "markdownlink", text: mdLinkText, url: mdLinkUrl });
+      nodes.push({ t: "markdownlink", children: parseSpans(mdLinkText, channelMap, roleMap), url: mdLinkUrl });
     } else if (boldItalicContent !== undefined) {
       nodes.push({ t: "bold", children: [{ t: "italic", children: parseSpans(boldItalicContent, channelMap, roleMap) }] });
     } else if (boldContent !== undefined) {

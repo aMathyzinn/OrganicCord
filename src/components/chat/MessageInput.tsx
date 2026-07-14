@@ -46,9 +46,11 @@ export function MessageInput({
 
   const customEmojis = useMemo(() => {
     if (!guildEmojisRaw) return [];
-    const flattened = Object.values(guildEmojisRaw).flat();
-    console.log("customEmojis computed:", flattened);
-    return flattened;
+    return Object.values(guildEmojisRaw).flat().map(e => ({
+      id: e.id || Math.random().toString(),
+      names: e.name ? [e.name] : [],
+      imgUrl: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? "gif" : "webp"}?size=48`
+    }));
   }, [guildEmojisRaw]);
 
   useEffect(() => {

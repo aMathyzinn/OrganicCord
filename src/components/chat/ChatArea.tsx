@@ -32,7 +32,7 @@ interface Props {
 }
 
 export function ChatArea({ channelId, accountId }: Props) {
-  const { cache, loading, fetchMessages, fetchMoreMessages, sendMessage } =
+  const { cache, loading, fetchMessages, fetchMoreMessages, sendMessage, deleteMessage } =
     useDiscordStore();
   const { accounts } = useAccountStore();
   const { activeGuildId } = useNavigationStore();
@@ -166,6 +166,7 @@ export function ChatArea({ channelId, accountId }: Props) {
               currentUserId={account?.user_id ?? ""}
               onLoadMore={handleLoadMore}
               onReply={setReplyingTo}
+              onDelete={(messageId) => deleteMessage(accountId, channelId, messageId)}
               channels={cache.channels[activeGuildId ?? ""] ?? []}
             />
           </div>
@@ -213,7 +214,7 @@ function ChannelHeader({
   onOpenConversations: () => void;
   onSearch: (q: string) => void;
 }) {
-  const { cache } = useDiscordStore();
+  const { cache, deleteMessage } = useDiscordStore();
   const { activeGuildId } = useNavigationStore();
   const { stealthMode } = useAccountStore();
   const { joinCall, leaveCall, isConnecting, isConnected } = useVoiceStore();

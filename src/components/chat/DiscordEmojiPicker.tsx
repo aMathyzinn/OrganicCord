@@ -24,8 +24,8 @@ export function DiscordEmojiPicker({ accountId, onSelect, children }: Props) {
       const guild = guilds.find(g => g.id === guildId);
       const emojis = guildEmojisRaw[guildId] || [];
       const filtered = emojis.filter(e => {
-        if (!e.names || !e.names[0]) return false;
-        return e.names[0].toLowerCase().includes(search.toLowerCase());
+        if (!e.name) return false;
+        return e.name.toLowerCase().includes(search.toLowerCase());
       });
       return {
         id: guildId,

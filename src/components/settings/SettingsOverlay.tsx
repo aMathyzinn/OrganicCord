@@ -3,9 +3,12 @@ import { useNavigationStore } from "@/stores/navigationStore";
 import { X } from "lucide-react";
 import { MyAccountSettings } from "./tabs/MyAccountSettings";
 import { VoiceVideoSettings } from "./tabs/VoiceVideoSettings";
-import { AppearanceSettings } from "./tabs/AppearanceSettings"; // TS Server refresh
+import { AppearanceSettings } from "./tabs/AppearanceSettings";
+import { PrivacySettings } from "./tabs/PrivacySettings";
+import { NotificationsSettings } from "./tabs/NotificationsSettings";
+import { KeybindsSettings } from "./tabs/KeybindsSettings";
 
-type SettingsTab = "account" | "voice" | "appearance";
+type SettingsTab = "account" | "voice" | "appearance" | "privacy" | "notifications" | "keybinds";
 
 export function SettingsOverlay() {
   const { isSettingsOpen, closeSettings } = useNavigationStore();
@@ -57,6 +60,12 @@ export function SettingsOverlay() {
           >
             Minha Conta
           </TabButton>
+          <TabButton 
+            active={activeTab === "privacy"} 
+            onClick={() => setActiveTab("privacy")}
+          >
+            Privacidade e Segurança
+          </TabButton>
           
           <div style={{ height: 1, background: "var(--border-subtle)", margin: "8px 10px" }} />
           
@@ -75,6 +84,18 @@ export function SettingsOverlay() {
           >
             Voz e Vídeo
           </TabButton>
+          <TabButton 
+            active={activeTab === "notifications"} 
+            onClick={() => setActiveTab("notifications")}
+          >
+            Notificações
+          </TabButton>
+          <TabButton 
+            active={activeTab === "keybinds"} 
+            onClick={() => setActiveTab("keybinds")}
+          >
+            Atalhos de Teclado
+          </TabButton>
         </div>
       </div>
 
@@ -92,8 +113,11 @@ export function SettingsOverlay() {
       >
         <div style={{ maxWidth: 740, width: "100%", paddingRight: 40 }}>
           {activeTab === "account" && <MyAccountSettings />}
+          {activeTab === "privacy" && <PrivacySettings />}
           {activeTab === "voice" && <VoiceVideoSettings />}
           {activeTab === "appearance" && <AppearanceSettings />}
+          {activeTab === "notifications" && <NotificationsSettings />}
+          {activeTab === "keybinds" && <KeybindsSettings />}
         </div>
 
         {/* Close Button Area */}

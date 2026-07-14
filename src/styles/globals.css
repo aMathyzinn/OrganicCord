@@ -10,6 +10,7 @@
   --bg-tertiary: #1e1f22;
   --bg-accent: #404249;
   --bg-float: #111214;
+  --bg-floating: var(--bg-float);
   --bg-message-hover: rgba(4, 4, 5, 0.07);
 
   /* Text */

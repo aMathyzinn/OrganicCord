@@ -64,6 +64,15 @@ export const getChannels = (accountId: string, guildId: string) =>
 export const getForumThreads = (accountId: string, channelId: string, guildId: string) =>
   invoke<any>("get_forum_threads", { accountId, channelId, guildId });
 
+export const getRecentMentions = (accountId: string) =>
+  invoke<DiscordMessage[]>("get_recent_mentions", { accountId });
+
+export const getAuthSessions = (accountId: string) =>
+  invoke<any>("get_auth_sessions", { accountId });
+
+export const revokeAuthSession = (accountId: string, sessionIdHash: string) =>
+  invoke<any>("revoke_auth_session", { accountId, sessionIdHash });
+
 export const searchMessages = (
   accountId: string,
   query: string,
@@ -85,6 +94,19 @@ export const sendMessage = (
   content: string,
   replyTo?: string
 ) => invoke<DiscordMessage>("send_message", { accountId, channelId, content, replyTo });
+
+export const editMessage = (
+  accountId: string,
+  channelId: string,
+  messageId: string,
+  content: string
+) => invoke<DiscordMessage>("edit_message", { accountId, channelId, messageId, content });
+
+export const deleteMessage = (
+  accountId: string,
+  channelId: string,
+  messageId: string
+) => invoke<void>("delete_message", { accountId, channelId, messageId });
 
 export const sendInteraction = (
   accountId: string,

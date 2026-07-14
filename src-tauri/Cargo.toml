@@ -1,6 +1,6 @@
 [package]
 name = "organic-cord"
-version = "0.1.0"
+version = "0.1.1"
 description = "OrganicCord - Multi-account Discord client"
 authors = ["OrganicCord"]
 license = "MIT"

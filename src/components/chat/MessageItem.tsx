@@ -32,14 +32,20 @@ export function MessageItem({ message, isGrouped, isOwn, onReply, onDelete, chan
   const [hovered, setHovered] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(message.content || "");
   const { activeAccountId, activeChannelId } = useNavigationStore();
-  const { addReaction, removeReaction, pinMessage, unpinMessage } = useDiscordStore();
+  const { addReaction, removeReaction, pinMessage, unpinMessage, editMessage } = useDiscordStore();
   
   const guildEmojisRaw = useDiscordStore((s) => activeAccountId ? s.cache.guildEmojis[activeAccountId] : null);
 
   const customEmojis = useMemo(() => {
     if (!guildEmojisRaw) return [];
-    return Object.values(guildEmojisRaw).flat();
+    return Object.values(guildEmojisRaw).flat().map(e => ({
+      id: e.id || Math.random().toString(),
+      names: e.name ? [e.name] : [],
+      imgUrl: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? "gif" : "webp"}?size=48`
+    }));
   }, [guildEmojisRaw]);
 
   const author = message.author;
@@ -212,7 +218,51 @@ export function MessageItem({ message, isGrouped, isOwn, onReply, onDelete, chan
             whiteSpace: "pre-wrap",
           }}
         >
-          {message.content ? (
+          {isEditing ? (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ background: "var(--bg-tertiary)", borderRadius: "var(--radius-sm)", padding: 8 }}>
+                <textarea
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (activeAccountId && activeChannelId && editValue.trim()) {
+                        editMessage(activeAccountId, activeChannelId, message.id, editValue);
+                        setIsEditing(false);
+                      }
+                    } else if (e.key === "Escape") {
+                      setIsEditing(false);
+                      setEditValue(message.content || "");
+                    }
+                  }}
+                  autoFocus
+                  style={{
+                    width: "100%",
+                    background: "transparent",
+                    border: "none",
+                    outline: "none",
+                    color: "var(--text-normal)",
+                    fontFamily: "inherit",
+                    fontSize: 15,
+                    resize: "none",
+                    minHeight: 40,
+                  }}
+                />
+              </div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>
+                <span style={{ color: "var(--text-muted)" }}>escape to </span>
+                <span style={{ color: "var(--text-link)", cursor: "pointer", fontWeight: 500 }} onClick={() => { setIsEditing(false); setEditValue(message.content || ""); }}>cancel</span>
+                <span style={{ color: "var(--text-muted)" }}> • enter to </span>
+                <span style={{ color: "var(--text-link)", cursor: "pointer", fontWeight: 500 }} onClick={() => {
+                  if (activeAccountId && activeChannelId && editValue.trim()) {
+                    editMessage(activeAccountId, activeChannelId, message.id, editValue);
+                    setIsEditing(false);
+                  }
+                }}>save</span>
+              </div>
+            </div>
+          ) : message.content ? (
             <MessageContent content={message.content} channels={channels} />
           ) : message.type === 3 ? (
             <span style={{ fontSize: 15, fontWeight: 500 }}>
@@ -419,6 +469,10 @@ export function MessageItem({ message, isGrouped, isOwn, onReply, onDelete, chan
           content={message.content || ""}
           isOwn={!!isOwn}
           onReply={onReply}
+          onEdit={() => {
+            setIsEditing(true);
+            setEditValue(message.content || "");
+          }}
           onDelete={onDelete}
           isPinned={message.pinned}
           onPin={handlePin}

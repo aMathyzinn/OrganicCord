@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Copy, Reply, Trash2, Pin, User } from "lucide-react";
+import { Copy, Reply, Trash2, Pin, User, Edit } from "lucide-react";
 import { toast } from "@/components/ui/Toast";
 import { useProfileStore } from "@/stores/profileStore";
 
@@ -11,6 +11,7 @@ interface MessageContextMenuProps {
   isOwn: boolean;
   authorId?: string;
   onReply: () => void;
+  onEdit?: () => void;
   onDelete?: () => void;
   isPinned?: boolean;
   onPin?: () => void;
@@ -26,6 +27,7 @@ export function MessageContextMenu({
   isOwn,
   authorId,
   onReply,
+  onEdit,
   onDelete,
   isPinned,
   onPin,
@@ -82,6 +84,13 @@ export function MessageContextMenu({
   const handleReply = () => {
     onReply();
     onClose();
+  };
+
+  const handleEdit = () => {
+    if (onEdit) {
+      onEdit();
+      onClose();
+    }
   };
 
   const handleDelete = () => {
@@ -142,6 +151,14 @@ export function MessageContextMenu({
         label="Copiar ID da mensagem"
         onClick={handleCopyId}
       />
+
+      {isOwn && onEdit && (
+        <ContextMenuItem
+          icon={<Edit size={14} />}
+          label="Editar Mensagem"
+          onClick={handleEdit}
+        />
+      )}
 
       {/* Divider */}
       <div style={{ height: 1, background: "var(--border-subtle)", margin: "4px 0" }} />

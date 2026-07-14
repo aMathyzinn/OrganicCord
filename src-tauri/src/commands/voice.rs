@@ -86,7 +86,7 @@ pub async fn start_voice_connection(
                                         tokio::time::sleep(Duration::from_millis(interval as u64)).await;
                                         seq += 1;
                                         let hb = json!({ "op": 3, "d": seq });
-                                        if let Err(e) = tx_clone.lock().await.send(Message::Text(hb.to_string().into())).await {
+                                        if let Err(e) = tx_clone.lock().await.send(Message::Text(hb.to_string())).await {
                                             log::error!("[voice] Erro enviando heartbeat: {}", e);
                                             break;
                                         }
@@ -104,7 +104,7 @@ pub async fn start_voice_connection(
                                     }
                                 });
                                 
-                                if let Err(e) = ws_tx.lock().await.send(Message::Text(identify.to_string().into())).await {
+                                if let Err(e) = ws_tx.lock().await.send(Message::Text(identify.to_string())).await {
                                     log::error!("[voice] Erro enviando IDENTIFY: {}", e);
                                 }
 
@@ -150,7 +150,7 @@ pub async fn start_voice_connection(
                                                         }
                                                     }
                                                 });
-                                                if let Err(e) = ws_tx.lock().await.send(Message::Text(select_protocol.to_string().into())).await {
+                                                if let Err(e) = ws_tx.lock().await.send(Message::Text(select_protocol.to_string())).await {
                                                     log::error!("[voice] Erro SELECT_PROTOCOL: {}", e);
                                                 }
                                             }
@@ -177,7 +177,7 @@ pub async fn start_voice_connection(
                                         "op": 26,
                                         "d": { "key_package": key_package }
                                     });
-                                    if ws_tx.lock().await.send(Message::Text(dave_payload.to_string().into())).await.is_ok() {
+                                    if ws_tx.lock().await.send(Message::Text(dave_payload.to_string())).await.is_ok() {
                                         log::info!("[voice] DAVE MLS Key Package enviado!");
                                     }
                                 }

@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import type { StoredAccount, AccountSession, SessionStatus } from "@/types";
 import * as api from "@/lib/tauri";
+import { useNavigationStore } from "./navigationStore";
 
 export type PresenceStatus = "online" | "idle" | "dnd" | "invisible";
 
@@ -38,6 +39,7 @@ interface AccountState {
   clearError: () => void;
   toggleStealth: () => void;
   toggleHideAccount: (accountId: string) => void;
+  logoutAccount: (accountId: string) => Promise<void>;
 }
 
 export const useAccountStore = create<AccountState>()(
@@ -85,6 +87,27 @@ export const useAccountStore = create<AccountState>()(
             delete s.presenceStatus[accountId];
             delete s.customStatus[accountId];
           });
+        } catch (e) {
+          set((s) => { s.error = String(e); });
+          throw e;
+        }
+      },
+
+      logoutAccount: async (accountId: string) => {
+        try {
+          // Desconectar o websocket e remover do banco
+          await get().removeAccount(accountId);
+          
+          // Se for a conta ativa, tentar pular pra próxima
+          const navStore = useNavigationStore.getState();
+          if (navStore.activeAccountId === accountId) {
+            const nextAccount = get().accounts[0];
+            if (nextAccount) {
+              navStore.setActiveAccount(nextAccount.id);
+            } else {
+              navStore.setActiveAccount(null);
+            }
+          }
         } catch (e) {
           set((s) => { s.error = String(e); });
           throw e;

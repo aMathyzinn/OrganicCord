@@ -1,6 +1,17 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import type { DiscordGuild, DiscordChannel, DiscordMessage, DiscordDM, DiscordRelationship, DiscordPresence } from "@/types";
+import type { 
+  DiscordGuild, 
+  DiscordChannel, 
+  DiscordMessage, 
+  DiscordDM, 
+  DiscordRelationship, 
+  DiscordPresence,
+  DiscordEmoji,
+  DiscordRole,
+  DiscordMember,
+  DiscordThread
+} from "@/types";
 import * as api from "@/lib/tauri";
 
 interface DiscordCache {
@@ -8,15 +19,15 @@ interface DiscordCache {
   channels: Record<string, DiscordChannel[]>;     // guildId → channels
   messages: Record<string, DiscordMessage[]>;     // channelId → messages
   dms: Record<string, DiscordDM[]>;               // accountId → DMs
-  guildEmojis: Record<string, Record<string, any[]>>; // accountId -> guildId -> emojis
-  guildRoles: Record<string, Record<string, any[]>>; // accountId -> guildId -> roles
+  guildEmojis: Record<string, Record<string, DiscordEmoji[]>>; // accountId -> guildId -> emojis
+  guildRoles: Record<string, Record<string, DiscordRole[]>>; // accountId -> guildId -> roles
   session_ids: Record<string, string>;            // accountId -> sessionId
   relationships: Record<string, DiscordRelationship[]>; // accountId → relationships
   presences: Record<string, Record<string, DiscordPresence>>; // accountId -> userId -> presence
-  threads: Record<string, any[]>;                 // guildId → threads
+  threads: Record<string, DiscordThread[]>;                 // guildId → threads
   pinnedMessages: Record<string, DiscordMessage[]>; // channelId -> pinned messages
   unreads: Record<string, Record<string, { count: number; mentions: number; guildId?: string }>>; // accountId -> channelId -> unread data
-  typingUsers: Record<string, { userId: string; timestamp: number; member?: any }[]>; // channelId -> users
+  typingUsers: Record<string, { userId: string; timestamp: number; member?: DiscordMember }[]>; // channelId -> users
 }
 
 interface LoadingState {
@@ -45,6 +56,8 @@ interface DiscordStore {
   pinMessage: (accountId: string, channelId: string, messageId: string) => Promise<void>;
   unpinMessage: (accountId: string, channelId: string, messageId: string) => Promise<void>;
   sendMessage: (accountId: string, channelId: string, content: string, replyTo?: string) => Promise<void>;
+  editMessage: (accountId: string, channelId: string, messageId: string, content: string) => Promise<void>;
+  deleteMessage: (accountId: string, channelId: string, messageId: string) => Promise<void>;
   sendMessageWithAttachment: (
     accountId: string,
     channelId: string,
@@ -57,13 +70,13 @@ interface DiscordStore {
   addReaction: (accountId: string, channelId: string, messageId: string, emoji: string) => Promise<void>;
   removeReaction: (accountId: string, channelId: string, messageId: string, emoji: string) => Promise<void>;
   prependMessage: (channelId: string, message: DiscordMessage) => void;
-  addGuildEmojis: (accountId: string, guildId: string, emojis: any[]) => void;
-  addGuildRoles: (accountId: string, guildId: string, roles: any[]) => void;
+  addGuildEmojis: (accountId: string, guildId: string, emojis: DiscordEmoji[]) => void;
+  addGuildRoles: (accountId: string, guildId: string, roles: DiscordRole[]) => void;
   updatePresence: (accountId: string, presence: DiscordPresence) => void;
   updatePresences: (accountId: string, presences: DiscordPresence[]) => void;
   incrementUnread: (accountId: string, channelId: string, hasMention: boolean, guildId?: string) => void;
   clearUnread: (accountId: string, channelId: string) => void;
-  addTypingUser: (channelId: string, userId: string, timestamp: number, member?: any) => void;
+  addTypingUser: (channelId: string, userId: string, timestamp: number, member?: DiscordMember) => void;
   clearCache: (accountId: string) => void;
 }
 
@@ -311,6 +324,39 @@ export const useDiscordStore = create<DiscordStore>()(
       get().prependMessage(channelId, message);
     },
 
+    editMessage: async (accountId, channelId, messageId, content) => {
+      try {
+        const msg = await api.editMessage(accountId, channelId, messageId, content);
+        set((s) => {
+          const channelMsgs = s.cache.messages[channelId];
+          if (channelMsgs) {
+            const idx = channelMsgs.findIndex((m) => m.id === messageId);
+            if (idx !== -1) {
+              channelMsgs[idx] = msg;
+            }
+          }
+        });
+      } catch (e) {
+        console.error("Erro ao editar msg", e);
+        throw e;
+      }
+    },
+
+    deleteMessage: async (accountId, channelId, messageId) => {
+      try {
+        await api.deleteMessage(accountId, channelId, messageId);
+        set((s) => {
+          const channelMsgs = s.cache.messages[channelId];
+          if (channelMsgs) {
+            s.cache.messages[channelId] = channelMsgs.filter((m) => m.id !== messageId);
+          }
+        });
+      } catch (e) {
+        console.error("Erro ao deletar msg", e);
+        throw e;
+      }
+    },
+
     sendMessageWithAttachment: async (accountId, channelId, content, replyTo, fileName, filePath, fileData) => {
       const message = await api.sendMessageWithAttachment(
         accountId,
@@ -412,11 +458,10 @@ export const useDiscordStore = create<DiscordStore>()(
         if (!s.cache.guildEmojis[accountId]) {
           s.cache.guildEmojis[accountId] = {};
         }
-        s.cache.guildEmojis[accountId][guildId] = emojis.map((e: any) => ({
-          id: e.id,
-          names: [e.name],
-          imgUrl: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? "gif" : "webp"}?size=48`
-        }));
+        s.cache.guildEmojis[accountId][guildId] = emojis.map((e) => ({
+          ...e,
+          id: e.id || e.name || Math.random().toString(),
+        })) as DiscordEmoji[];
         
         try {
           localStorage.setItem(`guildEmojis-${accountId}`, JSON.stringify(s.cache.guildEmojis[accountId]));

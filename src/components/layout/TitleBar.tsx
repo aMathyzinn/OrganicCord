@@ -1,5 +1,6 @@
 import { minimizeWindow, maximizeWindow, closeWindow } from "@/lib/tauri";
 import { OrganicMark } from "@/components/ui/OrganicMark";
+import { InboxPopover } from "@/components/ui/InboxPopover";
 
 export function TitleBar() {
   return (
@@ -33,10 +34,14 @@ export function TitleBar() {
       <div
         style={{
           display: "flex",
-          gap: 2,
+          gap: 16,
+          alignItems: "center",
           WebkitAppRegion: "no-drag",
         } as React.CSSProperties}
       >
+        <InboxPopover />
+
+        <div style={{ display: "flex", gap: 2 }}>
         <TitleBarButton
           onClick={minimizeWindow}
           label="Minimizar"
@@ -58,6 +63,7 @@ export function TitleBar() {
         >
           <CloseIcon />
         </TitleBarButton>
+        </div>
       </div>
     </div>
   );

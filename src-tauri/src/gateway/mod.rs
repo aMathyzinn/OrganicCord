@@ -31,7 +31,9 @@ const MAX_MISSED_ACKS: u8 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PresenceStatus {
+    #[default]
     Online,
     Idle,
     Dnd,
@@ -49,11 +51,6 @@ impl PresenceStatus {
     }
 }
 
-impl Default for PresenceStatus {
-    fn default() -> Self {
-        PresenceStatus::Online
-    }
-}
 
 // ─── Commands sent TO the gateway task ───────────────────────────────────────
 
@@ -320,11 +317,11 @@ async fn run_gateway_session(
                                                 "browser": "Chrome",
                                                 "device": "",
                                                 "system_locale": "pt-BR",
-                                                "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                                                "browser_version": "120.0.0.0",
+                                                "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                                                "browser_version": "124.0.0.0",
                                                 "os_version": "10",
                                                 "release_channel": "stable",
-                                                "client_build_number": 257764
+                                                "client_build_number": 287661
                                             },
                                             "presence": {
                                                 "status": initial_status.as_str(),
@@ -344,7 +341,7 @@ async fn run_gateway_session(
                                             }
                                         }
                                     });
-                                    let msg = Message::Text(identify.to_string().into());
+                                    let msg = Message::Text(identify.to_string());
                                     if ws_tx.send(msg).await.is_err() {
                                         return GatewayExit::Error("WS send identify failed".into());
                                     }
@@ -421,7 +418,7 @@ async fn run_gateway_session(
                                             if !all_presences.is_empty() {
                                                 {
                                                     let mut cache = cached_presences.lock().unwrap();
-                                                    let entry = cache.entry(account_id.to_string()).or_insert_with(Vec::new);
+                                                    let entry = cache.entry(account_id.to_string()).or_default();
                                                     entry.extend(all_presences.clone());
                                                 }
                                                 let event_payload = serde_json::json!({
@@ -532,7 +529,7 @@ async fn run_gateway_session(
                             OP_HEARTBEAT => {
                                 // Server-requested heartbeat
                                 let hb = json!({ "op": OP_HEARTBEAT, "d": sequence });
-                                let _ = ws_tx.send(Message::Text(hb.to_string().into())).await;
+                                let _ = ws_tx.send(Message::Text(hb.to_string())).await;
                             }
                             _ => {}
                         }
@@ -547,7 +544,7 @@ async fn run_gateway_session(
             // Heartbeat tick
             _ = hb_rx.recv() => {
                 let hb = json!({ "op": OP_HEARTBEAT, "d": sequence });
-                if ws_tx.send(Message::Text(hb.to_string().into())).await.is_err() {
+                if ws_tx.send(Message::Text(hb.to_string())).await.is_err() {
                     return GatewayExit::Error("WS heartbeat send failed".into());
                 }
                 log::debug!("[gateway] heartbeat sent");
@@ -570,7 +567,7 @@ async fn run_gateway_session(
                                 "afk": status == PresenceStatus::Idle
                             }
                         });
-                        if ws_tx.send(Message::Text(presence.to_string().into())).await.is_err() {
+                        if ws_tx.send(Message::Text(presence.to_string())).await.is_err() {
                             return GatewayExit::Error("WS send presence failed".into());
                         }
                         log::info!("[gateway] presence updated → {}", status.as_str());
@@ -597,7 +594,7 @@ async fn run_gateway_session(
                                 "afk": false
                             }
                         });
-                        if ws_tx.send(Message::Text(presence.to_string().into())).await.is_err() {
+                        if ws_tx.send(Message::Text(presence.to_string())).await.is_err() {
                             return GatewayExit::Error("WS send custom activity failed".into());
                         }
                         log::info!("[gateway] custom activity updated");
@@ -622,7 +619,7 @@ async fn run_gateway_session(
                             "op": 4,
                             "d": d
                         });
-                        if ws_tx.send(Message::Text(payload.to_string().into())).await.is_err() {
+                        if ws_tx.send(Message::Text(payload.to_string())).await.is_err() {
                             return GatewayExit::Error("WS send voice state update failed".into());
                         }
                         log::info!("[gateway] voice state update sent (join channel)");
@@ -639,7 +636,7 @@ async fn run_gateway_session(
                             "op": 14,
                             "d": d
                         });
-                        if ws_tx.send(Message::Text(payload.to_string().into())).await.is_err() {
+                        if ws_tx.send(Message::Text(payload.to_string())).await.is_err() {
                             return GatewayExit::Error("WS send guild subscription failed".into());
                         }
                         log::info!("[gateway] guild subscription sent for {}", guild_id);
