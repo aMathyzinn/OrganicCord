@@ -3,12 +3,20 @@ import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useAccountStore } from "@/stores/accountStore";
+import { useNotificationStore } from "@/stores/notificationStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { APP_ICONS } from "@/lib/themeManager";
+import { OrganicMark } from "@/components/ui/OrganicMark";
 import { getGuildIconUrl, getInitials } from "@/lib/utils";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { Settings, Folder as FolderIcon } from "lucide-react";
+import { Settings, Folder as FolderIcon, BellOff, Plus } from "lucide-react";
 import { GuildContextMenu } from "@/components/ui/GuildContextMenu";
 
-export function GuildSidebar() {
+interface GuildSidebarProps {
+  onAddAccount?: () => void;
+}
+
+export function GuildSidebar({ onAddAccount }: GuildSidebarProps) {
   const { 
     activeAccountId, activeGuildId, setActiveGuild, setView, view, 
     navigateToDMs, guildFolders, toggleFolder, loadFolders,
@@ -50,7 +58,7 @@ export function GuildSidebar() {
     if (
       activeAccountId &&
       sessions[activeAccountId]?.status === "Connected" &&
-      !cache.guilds[activeAccountId]
+      (!cache.guilds[activeAccountId] || cache.guilds[activeAccountId].length === 0)
     ) {
       fetchGuilds(activeAccountId);
     }
@@ -177,21 +185,23 @@ export function GuildSidebar() {
                             {folder.isExpanded && (
                               <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", width: "100%", paddingLeft: 4 }}>
                                 {folderGuilds.map(guild => {
-                                  const iconUrl = getGuildIconUrl(guild.id, guild.icon);
                                   const guildUnreads = Object.values(cache.unreads[activeAccountId!] || {}).filter(u => u.guildId === guild.id);
                                   const hasUnread = guildUnreads.some(u => u.count > 0);
                                   const mentionCount = guildUnreads.reduce((sum, u) => sum + u.mentions, 0);
+                                  const isMuted = useNotificationStore.getState().isGuildMuted(guild.id);
 
                                   return (
                                     <GuildContextMenu key={guild.id} guildId={guild.id}>
                                       <div style={{ width: "100%" }}>
-                                        <Tooltip content={guild.name} position="right">
+                                        <Tooltip content={<GuildTooltipContent name={guild.name} isMuted={isMuted} />} position="right">
                                           <GuildIcon
                                             label={guild.name}
-                                            iconUrl={iconUrl}
+                                            guildId={guild.id}
+                                            iconHash={guild.icon}
                                             active={activeGuildId === guild.id}
                                             hasUnread={hasUnread}
                                             mentionCount={mentionCount}
+                                            isMuted={isMuted}
                                             onClick={() => {
                                               setView("guilds");
                                               setActiveGuild(guild.id);
@@ -214,10 +224,10 @@ export function GuildSidebar() {
                   const guild = guilds.find(g => g.id === id);
                   if (!guild) return null;
 
-                  const iconUrl = getGuildIconUrl(guild.id, guild.icon);
                   const guildUnreads = Object.values(cache.unreads[activeAccountId!] || {}).filter(u => u.guildId === guild.id);
                   const hasUnread = guildUnreads.some(u => u.count > 0);
                   const mentionCount = guildUnreads.reduce((sum, u) => sum + u.mentions, 0);
+                  const isMuted = useNotificationStore.getState().isGuildMuted(guild.id);
 
                   return (
                     <Draggable key={guild.id} draggableId={guild.id} index={index}>
@@ -234,13 +244,15 @@ export function GuildSidebar() {
                         >
                           <GuildContextMenu guildId={guild.id}>
                             <div style={{ width: "100%" }}>
-                              <Tooltip content={guild.name} position="right">
+                              <Tooltip content={<GuildTooltipContent name={guild.name} isMuted={isMuted} />} position="right">
                                 <GuildIcon
                                   label={guild.name}
-                                  iconUrl={iconUrl}
+                                  guildId={guild.id}
+                                  iconHash={guild.icon}
                                   active={activeGuildId === guild.id}
                                   hasUnread={hasUnread}
                                   mentionCount={mentionCount}
+                                  isMuted={isMuted}
                                   onClick={() => {
                                     setView("guilds");
                                     setActiveGuild(guild.id);
@@ -260,6 +272,31 @@ export function GuildSidebar() {
           </Droppable>
         </DragDropContext>
       )}
+
+      {/* Botão Adicionar Servidor / Conta (Abaixo do último servidor) */}
+      <Tooltip content="Adicionar Servidor" position="right">
+        <button
+          onClick={onAddAccount}
+          className="add-server-btn hover-bg-brand hover-color-white"
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: "50%",
+            background: "var(--bg-secondary)",
+            border: "none",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--status-online)",
+            transition: "all 0.2s",
+            marginTop: 4,
+            flexShrink: 0,
+          }}
+        >
+          <Plus size={24} />
+        </button>
+      </Tooltip>
 
       {/* Settings Button */}
       <div style={{ flex: 1 }} />
@@ -290,30 +327,64 @@ export function GuildSidebar() {
   );
 }
 
+function GuildTooltipContent({ name, isMuted }: { name: string; isMuted?: boolean }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: "#ffffff", lineHeight: "18px" }}>
+          {name}
+        </span>
+      </div>
+      {isMuted && (
+        <span style={{ fontSize: 12, color: "#949ba4", fontWeight: 400, lineHeight: "14px" }}>
+          Silenciado(a)
+        </span>
+      )}
+    </div>
+  );
+}
+
 function GuildIcon({
   label,
-  iconUrl,
+  guildId,
+  iconHash,
+  iconUrl: initialIconUrl,
   active,
   onClick,
   isHome,
   hasUnread,
   mentionCount,
+  isMuted,
 }: {
   label: string;
+  guildId?: string;
+  iconHash?: string | null;
   iconUrl?: string | null;
   active: boolean;
   onClick: () => void;
   isHome?: boolean;
   hasUnread?: boolean;
   mentionCount?: number;
+  isMuted?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const show = active || hovered;
 
+  const appIconId = useSettingsStore((s) => s.settings.appIcon) || "dark_mono";
+  const iconPreset = APP_ICONS.find((i) => i.id === appIconId) || APP_ICONS[1] || APP_ICONS[0];
+
+  const homeBg = show ? iconPreset.bgGradient : "var(--bg-secondary)";
+
+  const currentIconUrl = isHome
+    ? null
+    : guildId && iconHash !== undefined
+    ? getGuildIconUrl(guildId, iconHash, 96, hovered)
+    : initialIconUrl;
+
   return (
-    <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center", alignItems: "center" }}>
+    <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center", alignItems: "center", opacity: isMuted && !active ? 0.75 : 1 }}>
       {/* Unread dot (White) */}
-      {hasUnread && !active && (
+      {hasUnread && !active && !isMuted && (
         <div
           style={{
             position: "absolute",
@@ -342,28 +413,18 @@ function GuildIcon({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: show
-            ? isHome
-              ? "var(--brand-500)"
-              : "var(--bg-secondary)"
-            : "var(--bg-secondary)",
-          transition: "border-radius 200ms, background 150ms",
+          background: isHome ? homeBg : show ? "var(--bg-secondary)" : "var(--bg-secondary)",
+          transition: "border-radius 200ms, background 150ms, transform 150ms",
           padding: 0,
           flexShrink: 0,
+          boxShadow: isHome && show ? "0 4px 12px rgba(0,0,0,0.3)" : "none",
         }}
       >
         {isHome ? (
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill={show ? "#fff" : "var(--text-muted)"}
-          >
-            <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057c.002.022.015.043.032.053a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z" />
-          </svg>
-        ) : iconUrl ? (
+          <OrganicMark size={34} />
+        ) : currentIconUrl ? (
           <img
-            src={iconUrl}
+            src={currentIconUrl}
             alt={label}
             width={48}
             height={48}
@@ -373,7 +434,7 @@ function GuildIcon({
             }}
           />
         ) : (
-            <span
+          <span
             style={{
               fontSize: 13,
               fontWeight: 700,
@@ -389,7 +450,7 @@ function GuildIcon({
       </button>
 
       {/* Mention badge (Red) */}
-      {mentionCount !== undefined && mentionCount > 0 && (
+      {mentionCount !== undefined && mentionCount > 0 ? (
         <div
           style={{
             position: "absolute",
@@ -411,7 +472,28 @@ function GuildIcon({
         >
           {mentionCount > 99 ? "99+" : mentionCount}
         </div>
-      )}
+      ) : isMuted ? (
+        <div
+          style={{
+            position: "absolute",
+            bottom: -2,
+            right: 0,
+            background: "var(--bg-secondary)",
+            color: "var(--text-muted)",
+            fontSize: 10,
+            padding: "3px",
+            borderRadius: "50%",
+            border: "2px solid var(--bg-tertiary)",
+            pointerEvents: "none",
+            zIndex: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <BellOff size={12} />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -40,16 +40,17 @@ export function SettingsOverlay() {
       {/* Left Sidebar */}
       <div
         style={{
-          width: "35%",
-          minWidth: 200,
-          maxWidth: 300,
+          width: "30%",
+          minWidth: 180,
+          maxWidth: 260,
           background: "var(--bg-secondary)",
           display: "flex",
           justifyContent: "flex-end",
-          padding: "60px 20px 60px 0",
+          padding: "clamp(20px, 4vh, 60px) 16px clamp(20px, 4vh, 60px) 0",
+          overflowY: "auto",
         }}
       >
-        <div style={{ width: 220, display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ width: "100%", maxWidth: 220, display: "flex", flexDirection: "column", gap: 2 }}>
           <div style={{ padding: "0 10px 6px", fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
             Configurações de Usuário
           </div>
@@ -104,14 +105,14 @@ export function SettingsOverlay() {
         style={{
           flex: 1,
           background: "var(--bg-primary)",
-          padding: "60px 40px",
+          padding: "clamp(20px, 4vh, 60px) clamp(20px, 3vw, 40px)",
           display: "flex",
           justifyContent: "flex-start",
           position: "relative",
           overflowY: "auto",
         }}
       >
-        <div style={{ maxWidth: 740, width: "100%", paddingRight: 40 }}>
+        <div style={{ maxWidth: 740, width: "100%", paddingRight: 60 }}>
           {activeTab === "account" && <MyAccountSettings />}
           {activeTab === "privacy" && <PrivacySettings />}
           {activeTab === "voice" && <VoiceVideoSettings />}
@@ -121,7 +122,7 @@ export function SettingsOverlay() {
         </div>
 
         {/* Close Button Area */}
-        <div style={{ position: "absolute", top: 60, right: 40, display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <div style={{ position: "fixed", top: "clamp(16px, 3vh, 40px)", right: "clamp(16px, 3vw, 40px)", display: "flex", flexDirection: "column", alignItems: "center", zIndex: 100000 }}>
           <button
             onClick={closeSettings}
             style={{
@@ -129,19 +130,20 @@ export function SettingsOverlay() {
               height: 36,
               borderRadius: "50%",
               border: "2px solid var(--text-muted)",
-              background: "transparent",
+              background: "var(--bg-secondary)",
               color: "var(--text-muted)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               cursor: "pointer",
               transition: "all 0.2s",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
             }}
             className="hover-color-normal hover-border-normal"
           >
             <X size={18} />
           </button>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginTop: 8 }}>ESC</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", marginTop: 4 }}>ESC</span>
         </div>
       </div>
     </div>

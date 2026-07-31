@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
+import { useVoiceStore } from "@/stores/voiceStore";
 import { useAccountStore } from "@/stores/accountStore";
+import { useNotificationStore } from "@/stores/notificationStore";
+import { ChannelContextMenu } from "@/components/ui/ChannelContextMenu";
 import type { DiscordChannel } from "@/types";
-import { Volume2, Drama, Megaphone, MessagesSquare, Search, X, ChevronRight } from "lucide-react";
+import { Volume2, Drama, Megaphone, MessagesSquare, Search, X, ChevronRight, BellOff } from "lucide-react";
 import { getGuildIconUrl, getInitials } from "@/lib/utils";
+import { VoicePanel } from "@/components/voice/VoicePanel";
 
 // Literal constants — avoids enum import issues at runtime
 const CT = {
@@ -28,6 +32,7 @@ interface Props {
 
 export function ChannelSidebar({ guildId }: Props) {
   const { activeAccountId, activeChannelId, setActiveChannel } = useNavigationStore();
+  const { joinCall } = useVoiceStore();
   const { cache, loading, fetchChannels } = useDiscordStore();
   const { accounts } = useAccountStore();
 
@@ -35,6 +40,8 @@ export function ChannelSidebar({ guildId }: Props) {
   const isLoading = loading.channels[guildId];
   const fetchError = useDiscordStore((s) => s.errors[`channels-${guildId}`]);
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
+  
+  const unreads = activeAccountId ? (cache.unreads[activeAccountId] ?? {}) : {};
 
   // Get guild info for the header
   const guilds = activeAccountId ? (cache.guilds[activeAccountId] ?? []) : [];
@@ -90,11 +97,12 @@ export function ChannelSidebar({ guildId }: Props) {
   return (
     <div
       style={{
-        width: 240,
+        width: "100%",
+        flex: 1,
         background: "var(--bg-secondary)",
         display: "flex",
         flexDirection: "column",
-        flexShrink: 0,
+        minHeight: 0,
         overflow: "hidden",
       }}
     >
@@ -214,18 +222,24 @@ export function ChannelSidebar({ guildId }: Props) {
         ) : (
           <>
             {/* Canais sem categoria */}
-            {grouped.uncategorized.map((ch) => (
-              <ChannelRow
-                key={ch.id}
-                channel={ch}
-                active={activeChannelId === ch.id}
-                onClick={() => setActiveChannel(ch.id)}
-                indent={false}
-                threads={grouped.threadMap[ch.id] || []}
-                activeChannelId={activeChannelId}
-                onChannelClick={setActiveChannel}
-              />
-            ))}
+            {grouped.uncategorized.map((ch) => {
+              const unread = unreads[ch.id];
+              const isUnread = unread && unread.count > 0;
+              return (
+                <ChannelRow
+                  key={ch.id}
+                  channel={ch}
+                  active={activeChannelId === ch.id}
+                  onClick={() => setActiveChannel(ch.id)}
+                  indent={false}
+                  threads={grouped.threadMap[ch.id] || []}
+                  activeChannelId={activeChannelId}
+                  onChannelClick={setActiveChannel}
+                  isUnread={isUnread}
+                  mentionCount={unread?.mentions}
+                />
+              );
+            })}
 
             {/* Categorias colapsáveis */}
             {grouped.cats.map((cat) => (
@@ -236,6 +250,7 @@ export function ChannelSidebar({ guildId }: Props) {
                 threadMap={grouped.threadMap}
                 activeChannelId={activeChannelId}
                 onChannelClick={setActiveChannel}
+                unreads={unreads}
               />
             ))}
           </>
@@ -253,13 +268,17 @@ function CategoryGroup({
   threadMap,
   activeChannelId,
   onChannelClick,
+  unreads,
 }: {
   category: DiscordChannel;
   channels: DiscordChannel[];
   threadMap: Record<string, DiscordChannel[]>;
   activeChannelId: string | null;
   onChannelClick: (id: string) => void;
+  unreads: Record<string, { count: number; mentions: number }>;
 }) {
+  const { activeAccountId, activeGuildId } = useNavigationStore();
+  const { joinCall } = useVoiceStore();
   const hasActive = channels.some((c) => c.id === activeChannelId || (threadMap[c.id] && threadMap[c.id].some(t => t.id === activeChannelId)));
   const [open, setOpen] = useState(true);
 
@@ -324,20 +343,35 @@ function CategoryGroup({
         }}
       >
         <div style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
-          {channels.map((ch) => (
-            <ChannelRow
-              key={ch.id}
-              channel={ch}
-              active={activeChannelId === ch.id}
-              onClick={() => onChannelClick(ch.id)}
-              indent
-              threads={threadMap[ch.id] || []}
-              activeChannelId={activeChannelId}
-              onChannelClick={onChannelClick}
-            />
-          ))}
+          {channels.map((ch) => {
+            const unread = unreads[ch.id];
+            const isUnread = unread && unread.count > 0;
+            return (
+              <ChannelRow
+                key={ch.id}
+                channel={ch}
+                active={activeChannelId === ch.id}
+                onClick={() => {
+                  if (ctype(ch) === CT.VOICE || ctype(ch) === CT.STAGE) {
+                    if (activeAccountId) {
+                      joinCall(activeAccountId, activeGuildId || "", ch.id);
+                    }
+                  } else {
+                    onChannelClick(ch.id);
+                  }
+                }}
+                indent
+                threads={threadMap[ch.id] || []}
+                activeChannelId={activeChannelId}
+                onChannelClick={onChannelClick}
+                isUnread={isUnread}
+                mentionCount={unread?.mentions}
+              />
+            );
+          })}
         </div>
       </div>
+      <VoicePanel />
     </div>
   );
 }
@@ -352,6 +386,8 @@ function ChannelRow({
   threads,
   activeChannelId,
   onChannelClick,
+  isUnread,
+  mentionCount,
 }: {
   channel: DiscordChannel;
   active: boolean;
@@ -360,49 +396,70 @@ function ChannelRow({
   threads?: DiscordChannel[];
   activeChannelId?: string | null;
   onChannelClick?: (id: string) => void;
+  isUnread?: boolean;
+  mentionCount?: number;
 }) {
   const type = ctype(channel);
   const isVoice = type === CT.VOICE || type === CT.STAGE;
   const icon = channelIcon(type);
+  const isMuted = useNotificationStore((s) => s.isChannelMuted(channel.id));
 
   return (
-    <>
-      <button
-        onClick={isVoice ? undefined : onClick}
-        className={!active && !isVoice ? "hover-bg-subtle hover-color-normal" : undefined}
-        style={{
-          width: "100%",
-          background: active ? "var(--bg-accent)" : "transparent",
-          border: "none",
-          borderRadius: 4,
-          padding: `4px 8px 4px ${indent ? 16 : 8}px`,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          cursor: isVoice ? "default" : "pointer",
-          textAlign: "left",
-          color: active
-            ? "var(--interactive-active)"
-            : isVoice
-            ? "var(--text-muted)"
-            : "var(--interactive-normal)",
-          transition: "background 80ms, color 80ms",
-        }}
-      >
-        <ChannelIcon type={type} icon={icon} />
-        <span
+    <div>
+      <ChannelContextMenu channelId={channel.id}>
+        <button
+          onClick={onClick}
+          className={!active && !isVoice ? "hover-bg-subtle hover-color-normal" : undefined}
           style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontSize: 15,
-            fontWeight: active ? 600 : 400,
-            lineHeight: 1,
+            width: "100%",
+            background: active ? "var(--bg-accent)" : "transparent",
+            border: "none",
+            borderRadius: 4,
+            padding: `4px 8px 4px ${indent ? 16 : 8}px`,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: "pointer",
+            textAlign: "left",
+            color: active
+              ? "var(--interactive-active)"
+              : isUnread
+              ? "var(--text-normal)"
+              : isVoice
+              ? "var(--text-muted)"
+              : "var(--interactive-normal)",
+            transition: "background 80ms, color 80ms",
+            position: "relative",
+            opacity: isMuted && !active ? 0.6 : 1,
           }}
         >
-          {channel.name ?? "canal"}
-        </span>
-      </button>
+          {isUnread && !active && !isVoice && !isMuted && (
+            <div style={{ position: "absolute", left: -4, top: "50%", transform: "translateY(-50%)", width: 4, height: 8, borderRadius: "0 4px 4px 0", background: "var(--text-normal)" }} />
+          )}
+          <ChannelIcon type={type} icon={icon} />
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 15,
+              fontWeight: active || (isUnread && !isVoice) ? 600 : 400,
+              lineHeight: 1,
+              flex: 1,
+            }}
+          >
+            {channel.name ?? "canal"}
+          </span>
+          {isMuted && (
+            <BellOff size={13} style={{ color: "var(--text-muted)", flexShrink: 0, opacity: 0.7 }} />
+          )}
+          {mentionCount !== undefined && mentionCount > 0 && (
+            <div style={{ background: "var(--status-dnd)", color: "white", fontSize: 11, fontWeight: 700, padding: "2px 6px", borderRadius: 12, lineHeight: 1 }}>
+              {mentionCount > 99 ? "99+" : mentionCount}
+            </div>
+          )}
+        </button>
+      </ChannelContextMenu>
 
       {/* Render threads */}
       {threads && threads.length > 0 && (
@@ -445,7 +502,7 @@ function ChannelRow({
           })}
         </div>
       )}
-    </>
+    </div>
   );
 }
 

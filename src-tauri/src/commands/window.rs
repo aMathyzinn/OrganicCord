@@ -19,3 +19,12 @@ pub async fn maximize_window(window: tauri::Window) -> Result<(), String> {
 pub async fn close_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
+
+/// Exibe, desminimiza e foca a janela principal.
+#[tauri::command]
+pub async fn focus_window(window: tauri::Window) -> Result<(), String> {
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    Ok(())
+}

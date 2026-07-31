@@ -13,6 +13,27 @@ import type {
   DiscordThread
 } from "@/types";
 import * as api from "@/lib/tauri";
+import { checkMessageSendLimit, checkMessageDeleteLimit, checkReactionLimit } from "@/lib/rateLimiter";
+
+export function normalizePresence(presence: any): { userId: string; normalized: DiscordPresence } | null {
+  if (!presence) return null;
+  const userId = presence.user?.id || presence.user_id || presence.id;
+  if (!userId) return null;
+
+  const normalized: DiscordPresence = {
+    user: {
+      id: userId,
+      username: presence.user?.username || "",
+      discriminator: presence.user?.discriminator || "",
+      avatar: presence.user?.avatar || null,
+    },
+    status: presence.status || "offline",
+    activities: presence.activities || [],
+    client_status: presence.client_status || {},
+  };
+
+  return { userId, normalized };
+}
 
 interface DiscordCache {
   guilds: Record<string, DiscordGuild[]>;         // accountId → guilds
@@ -67,6 +88,14 @@ interface DiscordStore {
     filePath?: string,
     fileData?: Uint8Array
   ) => Promise<void>;
+  sendVoiceMessage: (
+    accountId: string,
+    channelId: string,
+    audioData: Uint8Array,
+    durationSecs: number,
+    waveform: string,
+    replyTo?: string
+  ) => Promise<void>;
   addReaction: (accountId: string, channelId: string, messageId: string, emoji: string) => Promise<void>;
   removeReaction: (accountId: string, channelId: string, messageId: string, emoji: string) => Promise<void>;
   prependMessage: (channelId: string, message: DiscordMessage) => void;
@@ -75,9 +104,11 @@ interface DiscordStore {
   updatePresence: (accountId: string, presence: DiscordPresence) => void;
   updatePresences: (accountId: string, presences: DiscordPresence[]) => void;
   incrementUnread: (accountId: string, channelId: string, hasMention: boolean, guildId?: string) => void;
-  clearUnread: (accountId: string, channelId: string) => void;
+  clearUnread: (accountId: string, channelId: string, messageId?: string) => Promise<void>;
   addTypingUser: (channelId: string, userId: string, timestamp: number, member?: DiscordMember) => void;
   clearCache: (accountId: string) => void;
+  blockUser: (accountId: string, userId: string) => Promise<void>;
+  unblockUser: (accountId: string, userId: string) => Promise<void>;
 }
 
 export const useDiscordStore = create<DiscordStore>()(
@@ -127,9 +158,12 @@ export const useDiscordStore = create<DiscordStore>()(
           s.loading.guilds[accountId] = false;
         });
       } catch (e) {
+        console.error("[discordStore] fetchGuilds failed:", e);
         set((s) => {
           s.errors[`guilds-${accountId}`] = String(e);
           s.loading.guilds[accountId] = false;
+          // Garante que guilds não fique como undefined — mantém array vazio para re-tentar
+          if (!s.cache.guilds[accountId]) s.cache.guilds[accountId] = [];
         });
       }
     },
@@ -141,10 +175,41 @@ export const useDiscordStore = create<DiscordStore>()(
         const channels = await api.getChannels(accountId, guildId);
         // Subscribe to presences and members for this guild
         api.subscribeGuild(accountId, guildId).catch(console.error);
+        
+        let unreadState: Record<string, string> = {};
+        try {
+          unreadState = await api.invoke<Record<string, string>>("get_unread_state", { accountId });
+        } catch (e) {
+          console.error("Failed to load unread state", e);
+        }
+
         // Ordena por posição
         channels.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
         set((s) => {
           s.cache.channels[guildId] = channels;
+          
+          if (!s.cache.unreads[accountId]) s.cache.unreads[accountId] = {};
+          
+          for (const ch of channels) {
+            const lastMsgId = ch.last_message_id;
+            if (lastMsgId) {
+              const readMsgId = unreadState[ch.id];
+              try {
+                // Convertendo para BigInt para comparar snowflake IDs corretamente
+                const isUnread = !readMsgId || BigInt(readMsgId) < BigInt(lastMsgId);
+                if (isUnread) {
+                  if (!s.cache.unreads[accountId][ch.id]) {
+                    s.cache.unreads[accountId][ch.id] = { count: 1, mentions: 0, guildId };
+                  } else if (s.cache.unreads[accountId][ch.id].count === 0) {
+                    s.cache.unreads[accountId][ch.id].count = 1;
+                  }
+                }
+              } catch (_e) {
+                // ID não numérico (ex: thread de fórum) — ignora silenciosamente
+              }
+            }
+          }
+          
           s.loading.channels[guildId] = false;
         });
       } catch (e) {
@@ -307,8 +372,15 @@ export const useDiscordStore = create<DiscordStore>()(
           }
           if (presences && Array.isArray(presences)) {
             for (const presence of presences) {
-              if (presence && presence.user && presence.user.id) {
-                s.cache.presences[accountId][presence.user.id] = presence;
+              const norm = normalizePresence(presence);
+              if (norm) {
+                const existing = s.cache.presences[accountId][norm.userId] || {};
+                s.cache.presences[accountId][norm.userId] = {
+                  ...existing,
+                  ...norm.normalized,
+                  user: { ...(existing.user || {}), ...norm.normalized.user },
+                  client_status: { ...(existing.client_status || {}), ...norm.normalized.client_status },
+                };
               }
             }
           }
@@ -319,9 +391,98 @@ export const useDiscordStore = create<DiscordStore>()(
       }
     },
 
+    blockUser: async (accountId, userId) => {
+      try {
+        await api.blockUser(accountId, userId);
+        set((s) => {
+          const rels = s.cache.relationships[accountId] || [];
+          const idx = rels.findIndex((r) => r.user.id === userId);
+          if (idx !== -1) {
+            rels[idx] = { ...rels[idx], relationship_type: 2 };
+          } else {
+            rels.push({
+              id: userId,
+              relationship_type: 2,
+              nickname: null,
+              user: { id: userId, username: "Usuário", discriminator: "0000", avatar: null },
+            });
+          }
+          s.cache.relationships[accountId] = [...rels];
+        });
+        get().fetchRelationships(accountId);
+      } catch (e) {
+        console.error("Erro ao bloquear usuário:", e);
+      }
+    },
+
+    unblockUser: async (accountId, userId) => {
+      try {
+        await api.removeRelationship(accountId, userId);
+        set((s) => {
+          if (s.cache.relationships[accountId]) {
+            s.cache.relationships[accountId] = s.cache.relationships[accountId].filter((r) => r.user.id !== userId);
+          }
+        });
+        get().fetchRelationships(accountId);
+      } catch (e) {
+        console.error("Erro ao desbloquear usuário:", e);
+      }
+    },
+
     sendMessage: async (accountId, channelId, content, replyTo) => {
-      const message = await api.sendMessage(accountId, channelId, content, replyTo);
-      get().prependMessage(channelId, message);
+      // Client-side rate limit guard — prevents spam before hitting Discord's API
+      const rateError = checkMessageSendLimit(channelId);
+      if (rateError) {
+        const clydeMsg: DiscordMessage = {
+          id: "clyde-rl-" + Date.now(),
+          channel_id: channelId,
+          author: {
+            id: "1",
+            username: "Clyde",
+            global_name: "Clyde",
+            discriminator: "0000",
+            avatar: null,
+            bot: true,
+          },
+          content: `⚠️ ${rateError}`,
+          timestamp: new Date().toISOString(),
+          edited_timestamp: null,
+          attachments: [],
+          embeds: [],
+          pinned: false,
+          type: 0,
+        };
+        get().prependMessage(channelId, clydeMsg);
+        return;
+      }
+
+      try {
+        const message = await api.sendMessage(accountId, channelId, content, replyTo);
+        get().prependMessage(channelId, message);
+      } catch (err: any) {
+        console.error("Erro ao enviar mensagem:", err);
+        const clydeMsg: DiscordMessage = {
+          id: "clyde-" + Date.now(),
+          channel_id: channelId,
+          author: {
+            id: "1",
+            username: "Clyde",
+            global_name: "Clyde",
+            discriminator: "0000",
+            avatar: null,
+            bot: true,
+          },
+          content: "Sua mensagem não pôde ser entregue. Você não compartilha um servidor comum com este usuário ou o usuário te bloqueou.",
+          timestamp: new Date().toISOString(),
+          edited_timestamp: null,
+          attachments: [],
+          embeds: [],
+          pinned: false,
+          type: 0,
+        };
+        get().prependMessage(channelId, clydeMsg);
+        throw err;
+      }
     },
 
     editMessage: async (accountId, channelId, messageId, content) => {
@@ -343,6 +504,12 @@ export const useDiscordStore = create<DiscordStore>()(
     },
 
     deleteMessage: async (accountId, channelId, messageId) => {
+      // Client-side guard against bulk/rapid deletion
+      const rateError = checkMessageDeleteLimit(channelId);
+      if (rateError) {
+        console.warn("[rate-limit] deleteMessage blocked:", rateError);
+        throw new Error(rateError);
+      }
       try {
         await api.deleteMessage(accountId, channelId, messageId);
         set((s) => {
@@ -370,7 +537,30 @@ export const useDiscordStore = create<DiscordStore>()(
       get().prependMessage(channelId, message);
     },
 
+    sendVoiceMessage: async (accountId, channelId, audioData, durationSecs, waveform, replyTo) => {
+      const rateError = checkMessageSendLimit(channelId);
+      if (rateError) {
+        console.warn("[rate-limit] sendVoiceMessage blocked:", rateError);
+        return;
+      }
+      const message = await api.sendVoiceMessage(
+        accountId,
+        channelId,
+        Array.from(audioData),
+        durationSecs,
+        waveform,
+        replyTo
+      );
+      get().prependMessage(channelId, message);
+    },
+
     addReaction: async (accountId, channelId, messageId, emoji) => {
+      // Client-side guard against reaction spam
+      const rateError = checkReactionLimit(messageId);
+      if (rateError) {
+        console.warn("[rate-limit] addReaction blocked:", rateError);
+        return;
+      }
       // Optimistic update
       set((s) => {
         const msgs = s.cache.messages[channelId];
@@ -478,21 +668,39 @@ export const useDiscordStore = create<DiscordStore>()(
     },
 
     updatePresence: (accountId, presence) => {
+      const norm = normalizePresence(presence);
+      if (!norm) return;
       set((s) => {
         if (!s.cache.presences[accountId]) {
           s.cache.presences[accountId] = {};
         }
-        s.cache.presences[accountId][presence.user.id] = presence;
+        const existing = s.cache.presences[accountId][norm.userId] || {};
+        s.cache.presences[accountId][norm.userId] = {
+          ...existing,
+          ...norm.normalized,
+          user: { ...(existing.user || {}), ...norm.normalized.user },
+          client_status: { ...(existing.client_status || {}), ...norm.normalized.client_status },
+        };
       });
     },
 
     updatePresences: (accountId, presences) => {
+      if (!Array.isArray(presences)) return;
       set((s) => {
         if (!s.cache.presences[accountId]) {
           s.cache.presences[accountId] = {};
         }
         for (const presence of presences) {
-          s.cache.presences[accountId][presence.user.id] = presence;
+          const norm = normalizePresence(presence);
+          if (norm) {
+            const existing = s.cache.presences[accountId][norm.userId] || {};
+            s.cache.presences[accountId][norm.userId] = {
+              ...existing,
+              ...norm.normalized,
+              user: { ...(existing.user || {}), ...norm.normalized.user },
+              client_status: { ...(existing.client_status || {}), ...norm.normalized.client_status },
+            };
+          }
         }
       });
     },
@@ -512,13 +720,20 @@ export const useDiscordStore = create<DiscordStore>()(
       });
     },
 
-    clearUnread: (accountId, channelId) => {
+    clearUnread: async (accountId, channelId, messageId) => {
       set((s) => {
         if (s.cache.unreads[accountId] && s.cache.unreads[accountId][channelId]) {
           s.cache.unreads[accountId][channelId].count = 0;
           s.cache.unreads[accountId][channelId].mentions = 0;
         }
       });
+      if (messageId) {
+        try {
+          await api.invoke("mark_channel_as_read", { accountId, channelId, messageId });
+        } catch (e) {
+          console.error("Failed to mark as read:", e);
+        }
+      }
     },
 
     addTypingUser: (channelId, userId, timestamp, member) => {

@@ -33,19 +33,19 @@ pub struct AiGenerateResult {
 }
 
 #[tauri::command]
-pub async fn ai_generate(_payload: AiGeneratePayload, _app: tauri::AppHandle, _state: tauri::State<'_, crate::session::SessionManager>) -> Result<AiGenerateResult, String> { Err("AI is disabled".to_string()) }
+pub async fn ai_generate(payload: AiGeneratePayload, app: tauri::AppHandle, _state: tauri::State<'_, crate::session::SessionManager>) -> Result<AiGenerateResult, String> { Err("AI is disabled".to_string()) }
 
 #[tauri::command]
-pub async fn ai_test_config(_config: AiConfig, _test_message: String) -> Result<String, String> { Err("AI is disabled".to_string()) }
+pub async fn ai_test_config(config: AiConfig, test_message: String) -> Result<String, String> { Err("AI is disabled".to_string()) }
 
 #[tauri::command]
-pub async fn discord_send_text(_account_id: String, _channel_id: String, _content: String, _reply_to: Option<String>, _app: tauri::AppHandle) -> Result<String, String> { Err("Disabled".to_string()) }
+pub async fn discord_send_text(account_id: String, channel_id: String, content: String, reply_to: Option<String>, app: tauri::AppHandle) -> Result<String, String> { Err("Disabled".to_string()) }
 
 #[tauri::command]
-pub async fn discord_trigger_typing(_account_id: String, _channel_id: String, _app: tauri::AppHandle) -> Result<(), String> { Ok(()) }
+pub async fn discord_trigger_typing(account_id: String, channel_id: String, app: tauri::AppHandle) -> Result<(), String> { Ok(()) }
 
 #[tauri::command]
-pub async fn discord_add_reaction(_account_id: String, _channel_id: String, _message_id: String, _emoji: String, _app: tauri::AppHandle) -> Result<(), String> { Ok(()) }
+pub async fn discord_add_reaction(account_id: String, channel_id: String, message_id: String, emoji: String, app: tauri::AppHandle) -> Result<(), String> { Ok(()) }
 
 #[tauri::command]
-pub async fn discord_remove_reaction(_account_id: String, _channel_id: String, _message_id: String, _emoji: String, _app: tauri::AppHandle) -> Result<(), String> { Ok(()) }
+pub async fn discord_remove_reaction(account_id: String, channel_id: String, message_id: String, emoji: String, app: tauri::AppHandle) -> Result<(), String> { Ok(()) }

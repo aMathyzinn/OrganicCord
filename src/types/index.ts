@@ -16,6 +16,10 @@ export interface StoredAccount {
   user_id: string;
   avatar: string | null;
   global_name?: string | null;
+  banner?: string | null;
+  accent_color?: number | null;
+  bio?: string | null;
+  premium_type?: number | null;
   added_at: string;
   last_used: string | null;
   color: string;
@@ -49,6 +53,7 @@ export interface DiscordChannel {
   topic: string | null;
   nsfw: boolean | null;
   available_tags?: DiscordForumTag[];
+  last_message_id?: string | null;
 }
 
 export interface DiscordForumTag {
@@ -71,12 +76,24 @@ export enum ChannelType {
   GUILD_FORUM = 15,
 }
 
+export interface DiscordThreadMetadata {
+  archived: boolean;
+  auto_archive_duration: number;
+  archive_timestamp: string;
+  locked: boolean;
+  invitable?: boolean;
+  create_timestamp?: string | null;
+}
+
 export interface DiscordThread extends DiscordChannel {
   message_count: number;
   member_count: number;
   owner_id: string;
-  message?: DiscordMessage; // Starter message
+  total_message_sent?: number;
   applied_tags?: string[];
+  thread_metadata?: DiscordThreadMetadata;
+  last_message_id?: string | null;
+  message?: DiscordMessage; // Starter message
 }
 
 export interface DiscordUser {
@@ -90,6 +107,8 @@ export interface DiscordUser {
   banner?: string | null;
   accent_color?: number | null;
   avatar_decoration_data?: { asset: string; sku_id: string } | null;
+  premium_type?: number | null;
+  premium_since?: string | null;
 }
 
 export interface DiscordRelationship {
@@ -119,7 +138,7 @@ export interface DiscordActivity {
 }
 
 export interface DiscordPresence {
-  user: { id: string };
+  user: { id: string; username?: string; discriminator?: string; avatar?: string | null };
   status: string;
   activities: DiscordActivity[];
   client_status: {
@@ -149,6 +168,7 @@ export interface DiscordMessage {
   };
   poll?: DiscordPoll;
   components?: Record<string, unknown>[];
+  flags?: number;
 }
 
 export interface Attachment {
@@ -160,6 +180,8 @@ export interface Attachment {
   content_type?: string;
   width?: number;
   height?: number;
+  duration_secs?: number;
+  waveform?: string;
 }
 
 export interface Embed {
@@ -210,11 +232,6 @@ export interface AppNotification {
   read: boolean;
 }
 
-export interface DiscordThread {
-  id: string;
-  parent_id: string;
-  name: string;
-}
 
 export interface DiscordPollAnswer {
   answer_id: number;

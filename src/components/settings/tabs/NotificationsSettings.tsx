@@ -1,9 +1,38 @@
 import React from "react";
-import { Monitor } from "lucide-react";
+import { Monitor, BellOff, VolumeX } from "lucide-react";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useNotificationStore } from "@/stores/notificationStore";
+
+function formatRemainingTime(expiresAt: number | null): string {
+  if (expiresAt === null) return "Até ser reativado";
+  const remainingMs = expiresAt - Date.now();
+  if (remainingMs <= 0) return "Expirando...";
+  const mins = Math.ceil(remainingMs / (60 * 1000));
+  if (mins < 60) return `${mins} min restantes`;
+  const hours = Math.ceil(mins / 60);
+  return `${hours} horas restantes`;
+}
 
 export function NotificationsSettings() {
   const { settings, updateSetting } = useSettingsStore();
+  const {
+    mutedGuilds,
+    mutedChannels,
+    mutedUsers,
+    mutedUserGuilds,
+    unmuteGuild,
+    unmuteChannel,
+    unmuteUser,
+    unmuteUserInGuild,
+  } = useNotificationStore();
+
+  const activeMutedGuilds = Object.entries(mutedGuilds).filter(([_, exp]) => exp === null || exp > Date.now());
+  const activeMutedChannels = Object.entries(mutedChannels).filter(([_, exp]) => exp === null || exp > Date.now());
+  const activeMutedUsers = Object.entries(mutedUsers).filter(([_, exp]) => exp === null || exp > Date.now());
+  const activeMutedUserGuilds = Object.entries(mutedUserGuilds).filter(([_, exp]) => exp === null || exp > Date.now());
+
+  const totalMuted = activeMutedGuilds.length + activeMutedChannels.length + activeMutedUsers.length + activeMutedUserGuilds.length;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24, animation: "fadeIn 200ms ease" }}>
       <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-normal)", marginBottom: 8 }}>
@@ -54,6 +83,98 @@ export function NotificationsSettings() {
             />
           </label>
         </div>
+      </div>
+
+      <div style={{ height: 1, background: "var(--border-subtle)", margin: "8px 0" }} />
+
+      {/* Seção de Silenciados */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
+          Itens Silenciados ({totalMuted})
+        </h3>
+
+        {totalMuted === 0 ? (
+          <div style={{ background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: 16, textAlign: "center", color: "var(--text-muted)", fontSize: 14 }}>
+            Nenhum servidor, canal ou usuário silenciado no momento.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {activeMutedGuilds.map(([id, exp]) => (
+              <div key={`guild-${id}`} style={{ background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <BellOff size={18} color="var(--text-muted)" />
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-normal)" }}>Servidor ({id})</div>
+                    <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{formatRemainingTime(exp)}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => unmuteGuild(id)}
+                  style={{ background: "var(--bg-tertiary)", border: "none", color: "var(--text-normal)", padding: "6px 12px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: 13, fontWeight: 500 }}
+                >
+                  Dessilenciar
+                </button>
+              </div>
+            ))}
+
+            {activeMutedChannels.map(([id, exp]) => (
+              <div key={`channel-${id}`} style={{ background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <BellOff size={18} color="var(--text-muted)" />
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-normal)" }}>Canal ({id})</div>
+                    <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{formatRemainingTime(exp)}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => unmuteChannel(id)}
+                  style={{ background: "var(--bg-tertiary)", border: "none", color: "var(--text-normal)", padding: "6px 12px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: 13, fontWeight: 500 }}
+                >
+                  Dessilenciar
+                </button>
+              </div>
+            ))}
+
+            {activeMutedUsers.map(([id, exp]) => (
+              <div key={`user-${id}`} style={{ background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <VolumeX size={18} color="var(--text-muted)" />
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-normal)" }}>Usuário ({id})</div>
+                    <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{formatRemainingTime(exp)}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => unmuteUser(id)}
+                  style={{ background: "var(--bg-tertiary)", border: "none", color: "var(--text-normal)", padding: "6px 12px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: 13, fontWeight: 500 }}
+                >
+                  Dessilenciar
+                </button>
+              </div>
+            ))}
+
+            {activeMutedUserGuilds.map(([key, exp]) => {
+              const [guildId, userId] = key.split(":");
+              return (
+                <div key={`user-guild-${key}`} style={{ background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <VolumeX size={18} color="var(--text-muted)" />
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-normal)" }}>Usuário no Servidor ({userId})</div>
+                      <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{formatRemainingTime(exp)}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => unmuteUserInGuild(guildId, userId)}
+                    style={{ background: "var(--bg-tertiary)", border: "none", color: "var(--text-normal)", padding: "6px 12px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: 13, fontWeight: 500 }}
+                  >
+                    Dessilenciar
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div style={{ height: 1, background: "var(--border-subtle)", margin: "8px 0" }} />

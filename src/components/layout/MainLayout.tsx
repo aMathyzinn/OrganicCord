@@ -4,7 +4,6 @@ import { useDiscordStore } from "@/stores/discordStore";
 import { useAiConversationStore } from "@/stores/aiConversationStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { useArchiveStore } from "@/stores/archiveStore";
-import { AccountSwitcher } from "@/components/sidebar/AccountSwitcher";
 import { GuildSidebar } from "@/components/sidebar/GuildSidebar";
 import { ChannelSidebar } from "@/components/sidebar/ChannelSidebar";
 import { ChatArea } from "@/components/chat/ChatArea";
@@ -17,6 +16,7 @@ import { SettingsOverlay } from "@/components/settings/SettingsOverlay";
 import { Avatar } from "@/components/ui/Avatar";
 import { UserContextMenu } from "@/components/ui/UserContextMenu";
 import { Search, X, Gamepad2, Archive } from "lucide-react";
+import { UserBottomBar } from "@/components/sidebar/UserBottomBar";
 import type { DiscordDM } from "@/types";
 
 interface Props {
@@ -46,7 +46,7 @@ export function MainLayout({ onAddAccount }: Props) {
         overflow: "hidden",
       }}
     >
-      {/* Coluna 1: Barra Lateral Única (72px) - Contas + Servidores */}
+      {/* Coluna 1: Barra Lateral Única (72px) - Servidores */}
       <div
         style={{
           width: 72,
@@ -59,16 +59,29 @@ export function MainLayout({ onAddAccount }: Props) {
         }}
         className="unified-sidebar"
       >
-        <AccountSwitcher onAddAccount={onAddAccount} />
-        <GuildSidebar />
+        <GuildSidebar onAddAccount={onAddAccount} />
       </div>
 
-      {/* Coluna 2: DM list ou Canais do Servidor (240px) */}
-      {view === "dms" ? (
-        <DMList accountId={activeAccountId} fetchDMs={fetchDMs} />
-      ) : (
-        activeGuildId && <ChannelSidebar guildId={activeGuildId} />
-      )}
+      {/* Coluna 2: DM list ou Canais do Servidor (240px) + UserBottomBar no rodapé */}
+      <div
+        style={{
+          width: 240,
+          background: "var(--bg-secondary)",
+          display: "flex",
+          flexDirection: "column",
+          flexShrink: 0,
+          borderRight: "1px solid var(--border-subtle)",
+        }}
+      >
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          {view === "dms" ? (
+            <DMList accountId={activeAccountId} fetchDMs={fetchDMs} />
+          ) : (
+            activeGuildId && <ChannelSidebar guildId={activeGuildId} />
+          )}
+        </div>
+        <UserBottomBar onAddAccount={onAddAccount} />
+      </div>
 
       {/* Coluna 3: Área principal de conteúdo */}
       <div style={{ flex: 1, overflow: "hidden", background: "var(--bg-primary)", display: "flex" }}>
@@ -113,11 +126,12 @@ function DMList({ accountId, fetchDMs }: { accountId: string | null; fetchDMs: (
   return (
     <div
       style={{
-        width: 240,
+        width: "100%",
+        flex: 1,
         background: "var(--bg-secondary)",
         display: "flex",
         flexDirection: "column",
-        flexShrink: 0,
+        minHeight: 0,
       }}
     >
       <div
@@ -228,9 +242,12 @@ function DMSidebarList({ accountId, searchQuery }: { accountId: string; searchQu
           if (!recipient) return null;
           const isActive = activeChannelId === dm.id;
           return (
-            <UserContextMenu key={dm.id} userId={recipient.id}>
-              <button
+            <UserContextMenu key={dm.id} userId={recipient.id} channelId={dm.id}>
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => setActiveChannel(dm.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setActiveChannel(dm.id); }}
                 className={`dm-button ${!isActive ? "hover-bg-accent hover-color-normal" : ""}`}
                 style={{
                   width: "100%",
@@ -245,6 +262,7 @@ function DMSidebarList({ accountId, searchQuery }: { accountId: string; searchQu
                   color: isActive ? "var(--interactive-active)" : "var(--text-muted)",
                   transition: "background 100ms, color 100ms",
                   textAlign: "left",
+                  boxSizing: "border-box",
                 }}
               >
                 <Avatar
@@ -346,7 +364,7 @@ function DMSidebarList({ accountId, searchQuery }: { accountId: string; searchQu
                     <X size={14} />
                   </button>
                 </div>
-              </button>
+              </div>
             </UserContextMenu>
           );
         })

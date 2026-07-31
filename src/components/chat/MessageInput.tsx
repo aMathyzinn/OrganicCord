@@ -1,19 +1,17 @@
-import { useState, useRef, useCallback, type KeyboardEvent, type ChangeEvent } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent } from "react";
 import type { DiscordMessage } from "@/types";
 import { getDisplayName } from "@/lib/utils";
-import { Reply, X, Plus, File as FileIcon, Smile } from "lucide-react";
+import { Reply, X, Plus, File as FileIcon, Smile, Mic, Trash2, Send, Play, Pause } from "lucide-react";
 import EmojiPicker, { Theme, EmojiClickData, Categories } from "emoji-picker-react";
 import * as Popover from "@radix-ui/react-popover";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
-import { useMemo } from "react";
 import { OrganicMark } from "@/components/ui/OrganicMark";
 import { DiscordEmojiPicker } from "./DiscordEmojiPicker";
 
 import { open } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect } from "react";
 
 export type AttachmentData = 
   | { type: "file", file: File }
@@ -27,6 +25,45 @@ interface Props {
   accountColor?: string;
 }
 
+// ─── Helpers de Emoji Customizado ─────────────────────────────────────────────
+
+function parseCustomEmojiTag(str: string): { animated: boolean; name: string; id: string } | null {
+  const match = str.trim().match(/^<(a)?:([^:>]+):(\d+)>$/);
+  if (!match) return null;
+  return {
+    animated: !!match[1],
+    name: match[2],
+    id: match[3],
+  };
+}
+
+function getEmojiImgHTML(animated: boolean, name: string, id: string): string {
+  const fullCode = `<${animated ? "a" : ""}:${name}:${id}>`;
+  const url = `https://cdn.discordapp.com/emojis/${id}.${animated ? "gif" : "webp"}?size=48`;
+  return `<img src="${url}" data-emoji="${fullCode}" alt=":${name}:" title=":${name}:" style="width: 22px; height: 22px; vertical-align: middle; margin: 0 2px; display: inline-block; pointer-events: none; user-select: all;" />`;
+}
+
+function getRawContentFromEditable(el: HTMLElement): string {
+  let result = "";
+  el.childNodes.forEach((node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      result += node.nodeValue || "";
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as HTMLElement;
+      if (element.tagName === "IMG" && element.getAttribute("data-emoji")) {
+        result += element.getAttribute("data-emoji");
+      } else if (element.tagName === "BR") {
+        result += "\n";
+      } else if (element.tagName === "DIV" || element.tagName === "P") {
+        result += "\n" + getRawContentFromEditable(element);
+      } else {
+        result += getRawContentFromEditable(element);
+      }
+    }
+  });
+  return result;
+}
+
 export function MessageInput({
   channelId,
   replyingTo,
@@ -34,12 +71,12 @@ export function MessageInput({
   onSend,
   accountColor = "var(--brand-500)",
 }: Props) {
-  const [content, setContent] = useState("");
+  const [isEmpty, setIsEmpty] = useState(true);
   const [sending, setSending] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [attachment, setAttachment] = useState<AttachmentData | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
 
   const { activeAccountId } = useNavigationStore();
   const guildEmojisRaw = useDiscordStore((s) => activeAccountId ? s.cache.guildEmojis[activeAccountId] : null);
@@ -62,44 +99,285 @@ export function MessageInput({
     };
   }, []);
 
+  // Audio Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [audioLevels, setAudioLevels] = useState<number[]>([10, 15, 20, 10, 30, 15, 10]);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<any>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  const cleanupAudioResources = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      cleanupAudioResources();
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+
+      let mimeType = "audio/ogg;codecs=opus";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "audio/webm;codecs=opus";
+      }
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "audio/webm";
+      }
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "";
+      }
+
+      const options = mimeType ? { mimeType } : undefined;
+      const mediaRecorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.start(100);
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      // Start timer
+      recordTimerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+
+      // Web Audio level visualizer
+      try {
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        audioCtxRef.current = audioCtx;
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 32;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const updateLevels = () => {
+          if (!mediaStreamRef.current || audioCtx.state === "closed") return;
+          analyser.getByteFrequencyData(dataArray);
+          const sliced = Array.from(dataArray.slice(0, 12)).map((v) => Math.max(10, Math.floor((v / 255) * 28)));
+          setAudioLevels(sliced);
+          animFrameRef.current = requestAnimationFrame(updateLevels);
+        };
+        updateLevels();
+      } catch (err) {
+        console.warn("[audio] Visualizer non-critical error:", err);
+      }
+    } catch (err) {
+      console.error("[audio] Error accessing microphone:", err);
+      alert("Não foi possível acessar o microfone. Verifique as permissões de áudio do sistema.");
+    }
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    cleanupAudioResources();
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    audioChunksRef.current = [];
+  };
+
+  const stopAndSendRecording = async () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive" || !activeAccountId) return;
+
+    setSending(true);
+
+    const recorder = mediaRecorderRef.current;
+    const finalMime = recorder.mimeType || "audio/ogg";
+
+    const audioBlob = await new Promise<Blob>((resolve) => {
+      recorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: finalMime });
+        resolve(blob);
+      };
+      recorder.stop();
+    });
+
+    cleanupAudioResources();
+    setIsRecording(false);
+
+    try {
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioUint8 = new Uint8Array(arrayBuffer);
+
+      let durationSecs = recordingSeconds;
+      let base64Waveform = "";
+
+      let decodeCtx: AudioContext | null = null;
+      try {
+        decodeCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const decodedBuffer = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
+        durationSecs = decodedBuffer.duration;
+        const pcmData = decodedBuffer.getChannelData(0);
+
+        const sampleCount = 256;
+        const step = Math.max(1, Math.floor(pcmData.length / sampleCount));
+        const waveformBytes = new Uint8Array(sampleCount);
+        for (let i = 0; i < sampleCount; i++) {
+          let maxVal = 0;
+          const start = i * step;
+          const end = Math.min(pcmData.length, (i + 1) * step);
+          for (let j = start; j < end; j++) {
+            const abs = Math.abs(pcmData[j] || 0);
+            if (abs > maxVal) maxVal = abs;
+          }
+          waveformBytes[i] = Math.min(255, Math.floor(maxVal * 255));
+        }
+
+        let binaryStr = "";
+        for (let i = 0; i < waveformBytes.length; i++) {
+          binaryStr += String.fromCharCode(waveformBytes[i]);
+        }
+        base64Waveform = btoa(binaryStr);
+      } catch (err) {
+        console.warn("[audio] PCM waveform generation fallback:", err);
+      } finally {
+        if (decodeCtx && decodeCtx.state !== "closed") {
+          decodeCtx.close().catch(() => {});
+        }
+      }
+
+      await useDiscordStore
+        .getState()
+        .sendVoiceMessage(activeAccountId, channelId, audioUint8, durationSecs, base64Waveform, replyingTo?.id);
+
+      if (replyingTo) onCancelReply();
+    } catch (err) {
+      console.error("[audio] Error sending voice message:", err);
+    } finally {
+      setSending(false);
+      setRecordingSeconds(0);
+      audioChunksRef.current = [];
+    }
+  };
+
+  const updateStateFromEditable = useCallback(() => {
+    if (!editorRef.current) return;
+    const raw = getRawContentFromEditable(editorRef.current);
+    setIsEmpty(raw.trim().length === 0);
+  }, []);
+
+  const insertEmojiString = useCallback((emojiStr: string) => {
+    if (!editorRef.current) return;
+    editorRef.current.focus();
+
+    const parsed = parseCustomEmojiTag(emojiStr);
+    if (parsed) {
+      const html = getEmojiImgHTML(parsed.animated, parsed.name, parsed.id);
+      document.execCommand("insertHTML", false, html + "&nbsp;");
+    } else {
+      document.execCommand("insertText", false, emojiStr + " ");
+    }
+    updateStateFromEditable();
+  }, [updateStateFromEditable]);
+
   const handleEmojiClick = (emojiData: EmojiClickData) => {
     let toInsert = emojiData.emoji;
     if (emojiData.isCustom) {
       const customEmoji = emojiData as any;
       const isAnimated = customEmoji.imageUrl?.includes(".gif") || customEmoji.imgUrl?.includes(".gif");
-      toInsert = `<${isAnimated ? "a" : ""}:${emojiData.names[0]}:${emojiData.unified || customEmoji.id}>`;
+      const emojiName = emojiData.names?.[0] || customEmoji.name || "emoji";
+      toInsert = `<${isAnimated ? "a" : ""}:${emojiName}:${emojiData.unified || customEmoji.id}>`;
     }
-    setContent((prev) => prev + toInsert);
+    insertEmojiString(toInsert);
     setPickerOpen(false);
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-    }
   };
 
   const handleSend = useCallback(async () => {
-    const trimmed = content.trim();
-    if ((!trimmed && !attachment) || sending) return;
+    if (!editorRef.current) return;
+    const rawContent = getRawContentFromEditable(editorRef.current).trim();
+    if ((!rawContent && !attachment) || sending) return;
 
     setSending(true);
     try {
-      await onSend(trimmed, attachment || undefined);
-      setContent("");
-      setAttachment(null);
-      // Reseta altura do textarea
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
+      await onSend(rawContent, attachment || undefined);
+      if (editorRef.current) {
+        editorRef.current.innerHTML = "";
+        setIsEmpty(true);
       }
+      setAttachment(null);
+    } catch {
+      // Erro já tratado no discordStore (mensagem do Clyde) — não limpa o campo
     } finally {
       setSending(false);
       setUploadProgress(null);
       setTimeout(() => {
-        textareaRef.current?.focus();
+        editorRef.current?.focus();
       }, 0);
     }
-  }, [content, attachment, sending, onSend]);
+  }, [attachment, sending, onSend]);
+
+  const lastTypingRef = useRef<number>(0);
+
+  const handleInput = useCallback(() => {
+    if (!editorRef.current) return;
+    const rawContent = getRawContentFromEditable(editorRef.current);
+    setIsEmpty(rawContent.trim().length === 0);
+
+    // Auto-converte códigos de emoji recém-digitados (ex: `<:name:id>`) em imagens inline
+    const html = editorRef.current.innerHTML;
+    const convertedHTML = html.replace(/<(a)?:([^:>]+):(\d+)>/g, (_, animated, name, id) => {
+      return getEmojiImgHTML(!!animated, name, id);
+    });
+    if (convertedHTML !== html) {
+      editorRef.current.innerHTML = convertedHTML;
+      // Posiciona o cursor no final
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(editorRef.current);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+
+    if (rawContent.length > 0 && activeAccountId) {
+      const now = Date.now();
+      if (now - lastTypingRef.current > 5000) {
+        lastTypingRef.current = now;
+        import("@tauri-apps/api/core").then(({ invoke }) => {
+          invoke("trigger_typing", { accountId: activeAccountId, channelId }).catch(console.error);
+        });
+      }
+    }
+  }, [channelId, activeAccountId]);
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    (e: KeyboardEvent<HTMLDivElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
@@ -111,28 +389,28 @@ export function MessageInput({
     [handleSend, replyingTo, onCancelReply]
   );
 
-  const lastTypingRef = useRef<number>(0);
-
-  const handleInput = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      setContent(e.target.value);
-      // Auto-resize
-      const el = e.target;
-      el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 200) + "px";
-
-      if (e.target.value.length > 0 && activeAccountId) {
-        const now = Date.now();
-        if (now - lastTypingRef.current > 5000) {
-          lastTypingRef.current = now;
-          import("@tauri-apps/api/core").then(({ invoke }) => {
-            invoke("trigger_typing", { accountId: activeAccountId, channelId }).catch(console.error);
-          });
-        }
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+      const file = e.clipboardData.files[0];
+      if (file.size > 25 * 1024 * 1024) {
+        alert("Por favor, use o botão de anexo (+) para arquivos maiores que 25MB para otimização de memória.");
+        e.preventDefault();
+        return;
       }
-    },
-    [channelId, activeAccountId]
-  );
+      setAttachment({ type: "file", file });
+      e.preventDefault();
+      return;
+    }
+
+    // Cola texto sem formatação HTML estranha e auto-converte emojis
+    e.preventDefault();
+    const text = e.clipboardData.getData("text/plain");
+    const convertedHTML = text.replace(/<(a)?:([^:>]+):(\d+)>/g, (_, animated, name, id) => {
+      return getEmojiImgHTML(!!animated, name, id);
+    });
+    document.execCommand("insertHTML", false, convertedHTML);
+    updateStateFromEditable();
+  }, [updateStateFromEditable]);
 
   const handleAttachClick = async () => {
     try {
@@ -141,7 +419,6 @@ export function MessageInput({
         title: "Selecionar anexo",
       });
       if (selected && typeof selected === "string") {
-        // Tenta inferir o mime, no desktop o mime é mais util no backend, mas aqui passamos generico
         const name = selected.split(/\\|\//).pop() || "Arquivo";
         setAttachment({ type: "path", path: selected, name, size: 0, mime: "application/octet-stream" });
       }
@@ -296,11 +573,12 @@ export function MessageInput({
             ? "0 0 var(--radius-md) var(--radius-md)"
             : "var(--radius-md)",
           display: "flex",
-          alignItems: "flex-start",
+          alignItems: "center",
           gap: 8,
           padding: "0 12px",
           border: "1px solid transparent",
           transition: "border-color 150ms",
+          minHeight: 44,
         }}
         onFocusCapture={(e) =>
           ((e.currentTarget as HTMLDivElement).style.borderColor = accountColor)
@@ -309,162 +587,283 @@ export function MessageInput({
           ((e.currentTarget as HTMLDivElement).style.borderColor = "transparent")
         }
       >
-        <button
-          onClick={handleAttachClick}
-          title="Enviar um arquivo"
-          style={{
-            background: "var(--bg-tertiary)",
-            border: "none",
-            borderRadius: "50%",
-            width: 32,
-            height: 32,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-            color: "var(--text-normal)",
-            transition: "background 150ms",
-            marginTop: 6,
-            marginBottom: 6,
-          }}
-          className="hover-bg-modifier-selected"
-        >
-          <Plus size={18} />
-        </button>
-
-        <textarea
-          ref={textareaRef}
-          value={content}
-          onChange={handleInput}
-          onKeyDown={handleKeyDown}
-          onPaste={(e) => {
-            if (e.clipboardData.files && e.clipboardData.files.length > 0) {
-              const file = e.clipboardData.files[0];
-              if (file.size > 25 * 1024 * 1024) {
-                alert("Por favor, use o botão de anexo (+) para arquivos maiores que 25MB para otimização de memória.");
-                e.preventDefault();
-                return;
-              }
-              setAttachment({ type: "file", file });
-              e.preventDefault();
-            }
-          }}
-          disabled={sending}
-          placeholder={`Enviar mensagem...`}
-          rows={1}
-          style={{
-            flex: 1,
-            background: "transparent",
-            border: "none",
-            color: "var(--text-normal)",
-            fontSize: 15,
-            lineHeight: "20px",
-            resize: "none",
-            padding: "12px 0",
-            maxHeight: 200,
-            overflowY: "auto",
-            minHeight: 24,
-            outline: "none",
-            fontFamily: "inherit",
-          }}
-        />
-
-        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6, marginBottom: 6 }}>
-          {activeAccountId ? (
-            <DiscordEmojiPicker 
-              accountId={activeAccountId} 
-              onSelect={(emojiStr) => {
-                setContent((prev) => prev + (prev && !prev.endsWith(" ") ? " " : "") + emojiStr + " ");
-                textareaRef.current?.focus();
-              }} 
-            >
-              <button
-                title="Emoji do Servidor"
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  borderRadius: "50%",
-                  width: 32,
-                  height: 32,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                  color: "var(--text-muted)",
-                  transition: "color 150ms",
-                }}
-                className="hover-color-normal"
-              >
-                <OrganicMark size={20} />
-              </button>
-            </DiscordEmojiPicker>
-          ) : (
-            <div style={{ width: 32 }} />
-          )}
-
-          <Popover.Root open={pickerOpen} onOpenChange={setPickerOpen}>
-            <Popover.Trigger asChild>
-              <button
-                title="Adicionar Emoji"
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  borderRadius: "50%",
-                  width: 32,
-                  height: 32,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                  color: "var(--text-muted)",
-                  transition: "color 150ms",
-                }}
-                className="hover-color-normal"
-              >
-                <Smile size={20} />
-              </button>
-            </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Content side="top" align="end" sideOffset={10} style={{ zIndex: 100 }}>
-                <EmojiPicker
-                  onEmojiClick={handleEmojiClick}
-                  theme={Theme.DARK}
-                  lazyLoadEmojis={true}
-                  searchPlaceHolder="Pesquisar emoji..."
-                  customEmojis={customEmojis}
-                  categoryIcons={{
-                    [Categories.CUSTOM]: <OrganicMark size={16} />
-                  }}
-                />
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
-
-          {/* Botão enviar */}
-          <button
-            onClick={handleSend}
-            disabled={(!content.trim() && !attachment) || sending}
+        {isRecording ? (
+          <div
             style={{
-              background: (content.trim() || attachment) && !sending ? accountColor : "transparent",
-              border: "none",
-              borderRadius: "var(--radius-sm)",
-              width: 32,
-              height: 32,
-              cursor: (content.trim() || attachment) && !sending ? "pointer" : "default",
+              flex: 1,
               display: "flex",
               alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-              transition: "background 150ms, opacity 150ms",
-              opacity: (content.trim() || attachment) && !sending ? 1 : 0.3,
+              justifyContent: "space-between",
+              height: 44,
+              padding: "0 4px",
+              userSelect: "none",
             }}
           >
-            <SendIcon />
-          </button>
-        </div>
+            {/* Recording indicator & timer */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: "var(--status-danger)",
+                  boxShadow: "0 0 8px var(--status-danger)",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: "var(--status-danger)",
+                  fontFamily: "monospace",
+                }}
+              >
+                {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, "0")}
+              </span>
+
+              {/* Live Waveform Audio Levels */}
+              <div style={{ display: "flex", alignItems: "center", gap: 3, height: 24, marginLeft: 8 }}>
+                {audioLevels.map((lvl, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      width: 3,
+                      height: `${lvl}px`,
+                      maxHeight: 24,
+                      background: "var(--status-danger)",
+                      borderRadius: 2,
+                      transition: "height 50ms ease",
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Cancel & Send Buttons */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                onClick={cancelRecording}
+                title="Cancelar áudio"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 6,
+                  borderRadius: "50%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                className="hover-color-danger"
+              >
+                <Trash2 size={20} />
+              </button>
+
+              <button
+                onClick={stopAndSendRecording}
+                disabled={sending}
+                title="Enviar mensagem de voz"
+                style={{
+                  background: "var(--brand-500)",
+                  border: "none",
+                  borderRadius: "50%",
+                  width: 32,
+                  height: 32,
+                  color: "#fff",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                className="hover-opacity"
+              >
+                <Send size={16} style={{ marginLeft: 2 }} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={handleAttachClick}
+              title="Enviar um arquivo"
+              style={{
+                background: "var(--bg-tertiary)",
+                border: "none",
+                borderRadius: "50%",
+                width: 32,
+                height: 32,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                color: "var(--text-normal)",
+                transition: "background 150ms",
+                marginTop: 6,
+                marginBottom: 6,
+              }}
+              className="hover-bg-modifier-selected"
+            >
+              <Plus size={18} />
+            </button>
+
+            {/* ContentEditable Visual Emoji Input */}
+            <div style={{ flex: 1, position: "relative", minHeight: 44, display: "flex", alignItems: "center" }}>
+              {isEmpty && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 12,
+                    color: "var(--text-muted)",
+                    fontSize: 15,
+                    pointerEvents: "none",
+                    userSelect: "none",
+                  }}
+                >
+                  Enviar mensagem...
+                </div>
+              )}
+              <div
+                ref={editorRef}
+                contentEditable={!sending}
+                onInput={handleInput}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                style={{
+                  width: "100%",
+                  minHeight: 24,
+                  maxHeight: 200,
+                  overflowY: "auto",
+                  color: "var(--text-normal)",
+                  fontSize: 15,
+                  lineHeight: "20px",
+                  padding: "12px 0",
+                  outline: "none",
+                  wordBreak: "break-word",
+                  whiteSpace: "pre-wrap",
+                }}
+              />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6, marginBottom: 6 }}>
+              {/* Botão de Gravar Mensagem de Voz (Mic) */}
+              <button
+                onClick={startRecording}
+                title="Gravar mensagem de voz"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: "50%",
+                  width: 32,
+                  height: 32,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  color: "var(--text-muted)",
+                  transition: "color 150ms",
+                }}
+                className="hover-color-normal"
+              >
+                <Mic size={20} />
+              </button>
+
+              {activeAccountId ? (
+                <DiscordEmojiPicker 
+                  accountId={activeAccountId} 
+                  onSelect={(emojiStr) => insertEmojiString(emojiStr)} 
+                >
+                  <button
+                    title="Emoji do Servidor"
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      borderRadius: "50%",
+                      width: 32,
+                      height: 32,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      color: "var(--text-muted)",
+                      transition: "color 150ms",
+                    }}
+                    className="hover-color-normal"
+                  >
+                    <OrganicMark size={20} />
+                  </button>
+                </DiscordEmojiPicker>
+              ) : (
+                <div style={{ width: 32 }} />
+              )}
+
+              <Popover.Root open={pickerOpen} onOpenChange={setPickerOpen}>
+                <Popover.Trigger asChild>
+                  <button
+                    title="Adicionar Emoji"
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      borderRadius: "50%",
+                      width: 32,
+                      height: 32,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      color: "var(--text-muted)",
+                      transition: "color 150ms",
+                    }}
+                    className="hover-color-normal"
+                  >
+                    <Smile size={20} />
+                  </button>
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Content side="top" align="end" sideOffset={10} style={{ zIndex: 100 }}>
+                    <EmojiPicker
+                      onEmojiClick={handleEmojiClick}
+                      theme={Theme.DARK}
+                      lazyLoadEmojis={true}
+                      searchPlaceHolder="Pesquisar emoji..."
+                      customEmojis={customEmojis}
+                      categoryIcons={{
+                        [Categories.CUSTOM]: <OrganicMark size={16} />
+                      }}
+                    />
+                  </Popover.Content>
+                </Popover.Portal>
+              </Popover.Root>
+
+              {/* Botão enviar */}
+              <button
+                onClick={handleSend}
+                disabled={isEmpty && !attachment || sending}
+                style={{
+                  background: (!isEmpty || attachment) && !sending ? accountColor : "transparent",
+                  border: "none",
+                  borderRadius: "var(--radius-sm)",
+                  width: 32,
+                  height: 32,
+                  cursor: (!isEmpty || attachment) && !sending ? "pointer" : "default",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  transition: "background 150ms, opacity 150ms",
+                  opacity: (!isEmpty || attachment) && !sending ? 1 : 0.3,
+                }}
+              >
+                <SendIcon />
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {sending && uploadProgress !== null && (

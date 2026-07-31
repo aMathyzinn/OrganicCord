@@ -1,15 +1,52 @@
 import type { DiscordChannel } from "@/types";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
+import { useExternalLinkStore } from "@/stores/externalLinkStore";
 
 interface Props {
   content: string;
   channels?: DiscordChannel[];
   /** Embed mode: smaller font, no jumbo emoji, allows subset of markdown */
   embed?: boolean;
+  /** Highlight query for search results */
+  highlightQuery?: string;
 }
 
-export function MessageContent({ content, channels = [], embed = false }: Props) {
+function HighlightedText({ text, query }: { text: string; query?: string }) {
+  if (!query || !query.trim()) {
+    return <>{text}</>;
+  }
+
+  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(${escapedQuery})`, "gi");
+  const parts = text.split(regex);
+
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark
+            key={i}
+            style={{
+              background: "rgba(250, 166, 26, 0.45)",
+              color: "var(--text-normal)",
+              borderRadius: 3,
+              padding: "1px 4px",
+              fontWeight: 600,
+              boxShadow: "0 0 4px rgba(250, 166, 26, 0.3)",
+            }}
+          >
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+}
+
+export function MessageContent({ content, channels = [], embed = false, highlightQuery }: Props) {
   const accountId = useNavigationStore((s) => s.activeAccountId);
   const guildId = useNavigationStore((s) => s.activeGuildId);
   const roles = (accountId && guildId) ? useDiscordStore((s) => s.cache.guildRoles?.[accountId]?.[guildId]) : undefined;
@@ -20,7 +57,7 @@ export function MessageContent({ content, channels = [], embed = false }: Props)
 
   const nodes = parseMarkdown(content, channelMap, roleMap);
   const jumbo = !embed && isJumboEmoji(nodes);
-  return <>{nodes.map((n, i) => renderNode(n, i, jumbo, channelMap, embed))}</>;
+  return <>{nodes.map((n, i) => renderNode(n, i, jumbo, channelMap, embed, highlightQuery))}</>;
 }
 
 // ─── AST ─────────────────────────────────────────────────────────────────────
@@ -51,13 +88,14 @@ function renderNode(
   jumbo: boolean,
   channelMap: Map<string, string>,
   embed: boolean,
+  highlightQuery?: string,
 ): React.ReactNode {
   const ch = (children: Node[]) =>
-    children.map((n, i) => renderNode(n, i, jumbo, channelMap, embed));
+    children.map((n, i) => renderNode(n, i, jumbo, channelMap, embed, highlightQuery));
 
   switch (node.t) {
     case "text":
-      return <span key={key}>{node.v}</span>;
+      return <span key={key}><HighlightedText text={node.v} query={highlightQuery} /></span>;
 
     case "header": {
       const fontSize = node.level === 1 ? "1.5em" : node.level === 2 ? "1.25em" : "1.1em";
@@ -209,10 +247,12 @@ function renderNode(
         <a
           key={key}
           href={node.url}
-          target="_blank"
-          rel="noreferrer"
+          onClick={(e) => {
+            e.preventDefault();
+            useExternalLinkStore.getState().openExternalLink(node.url);
+          }}
           className="hover-underline"
-          style={{ color: "var(--text-link)", textDecoration: "none" }}
+          style={{ color: "var(--text-link)", textDecoration: "none", cursor: "pointer" }}
         >
           {node.url}
         </a>
@@ -223,10 +263,12 @@ function renderNode(
         <a
           key={key}
           href={node.url}
-          target="_blank"
-          rel="noreferrer"
+          onClick={(e) => {
+            e.preventDefault();
+            useExternalLinkStore.getState().openExternalLink(node.url);
+          }}
           className="hover-underline"
-          style={{ color: "var(--text-link)", textDecoration: "none" }}
+          style={{ color: "var(--text-link)", textDecoration: "none", cursor: "pointer" }}
           title={node.url}
         >
           {ch(node.children)}

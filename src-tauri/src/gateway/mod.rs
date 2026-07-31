@@ -16,6 +16,8 @@ const OP_HEARTBEAT: u8 = 1;
 const OP_IDENTIFY: u8 = 2;
 const OP_PRESENCE_UPDATE: u8 = 3;
 const OP_RESUME: u8 = 6;
+const OP_RECONNECT: u8 = 7;
+const OP_INVALID_SESSION: u8 = 9;
 const OP_HELLO: u8 = 10;
 const OP_HEARTBEAT_ACK: u8 = 11;
 
@@ -213,8 +215,22 @@ async fn gateway_task(
     let mut backoff = 1u64;
     let max_backoff = 60u64;
 
+    let mut session_id: Option<String> = None;
+    let mut resume_gateway_url: Option<String> = None;
+    let mut sequence: Option<u64> = None;
+
     'reconnect: loop {
-        match run_gateway_session(&token, &initial_status, &mut cmd_rx, &app, &account_id, &cached_presences).await {
+        match run_gateway_session(
+            &token,
+            &initial_status,
+            &mut cmd_rx,
+            &app,
+            &account_id,
+            &cached_presences,
+            &mut session_id,
+            &mut resume_gateway_url,
+            &mut sequence,
+        ).await {
             GatewayExit::Commanded => {
                 log::info!("[gateway] disconnected by command");
                 break 'reconnect;
@@ -247,9 +263,14 @@ async fn run_gateway_session(
     app: &Option<tauri::AppHandle>,
     account_id: &str,
     cached_presences: &Arc<Mutex<HashMap<String, Vec<Value>>>>,
+    session_id: &mut Option<String>,
+    resume_gateway_url: &mut Option<String>,
+    sequence: &mut Option<u64>,
 ) -> GatewayExit {
-    let url = "wss://gateway.discord.gg/?v=10&encoding=json".to_string();
-    let request = match url.into_client_request() {
+    let default_url = "wss://gateway.discord.gg/?v=10&encoding=json".to_string();
+    let url = resume_gateway_url.as_ref().cloned().unwrap_or(default_url);
+
+    let request = match url.as_str().into_client_request() {
         Ok(r) => r,
         Err(e) => return GatewayExit::Error(e.to_string()),
     };
@@ -263,8 +284,9 @@ async fn run_gateway_session(
 
     // Internal heartbeat channel
     let (hb_tx, mut hb_rx) = mpsc::channel::<()>(1);
-    let mut sequence: Option<u64> = None;
     let mut identified = false;
+    let mut ack_received = true;
+    let mut missed_acks: u8 = 0;
 
     loop {
         tokio::select! {
@@ -281,9 +303,9 @@ async fn run_gateway_session(
 
                         let op = payload["op"].as_u64().unwrap_or(255) as u8;
 
-                        // Update sequence for heartbeats
+                        // Update sequence for heartbeats and session resumes
                         if let Some(s) = payload["s"].as_u64() {
-                            sequence = Some(s);
+                            *sequence = Some(s);
                         }
 
                         match op {
@@ -306,51 +328,86 @@ async fn run_gateway_session(
                                 });
 
                                 if !identified {
-                                    // Send IDENTIFY
-                                    let identify = json!({
-                                        "op": OP_IDENTIFY,
-                                        "d": {
-                                            "token": token,
-                                            "capabilities": 16381,
-                                            "properties": {
-                                                "os": "Windows",
-                                                "browser": "Chrome",
-                                                "device": "",
-                                                "system_locale": "pt-BR",
-                                                "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                                                "browser_version": "124.0.0.0",
-                                                "os_version": "10",
-                                                "release_channel": "stable",
-                                                "client_build_number": 287661
-                                            },
-                                            "presence": {
-                                                "status": initial_status.as_str(),
-                                                "since": 0,
-                                                "activities": [],
-                                                "afk": false
-                                            },
-                                            "compress": false,
-                                            "client_state": {
-                                                "guild_versions": {},
-                                                "highest_last_message_id": "0",
-                                                "read_state_version": 0,
-                                                "user_guild_settings_version": -1,
-                                                "user_settings_version": -1,
-                                                "private_channels_version": "0",
-                                                "api_code_version": 0
+                                    if let (Some(sid), Some(seq)) = (session_id.as_ref(), *sequence) {
+                                        // Attempt OP_RESUME (Opcode 6)
+                                        let resume_payload = json!({
+                                            "op": OP_RESUME,
+                                            "d": {
+                                                "token": token,
+                                                "session_id": sid,
+                                                "seq": seq
                                             }
+                                        });
+                                        let msg = Message::Text(resume_payload.to_string());
+                                        if ws_tx.send(msg).await.is_err() {
+                                            return GatewayExit::Error("WS send resume failed".into());
                                         }
-                                    });
-                                    let msg = Message::Text(identify.to_string());
-                                    if ws_tx.send(msg).await.is_err() {
-                                        return GatewayExit::Error("WS send identify failed".into());
+                                        identified = true;
+                                        log::info!("[gateway] RESUME sent for session {} at seq {}", sid, seq);
+                                    } else {
+                                        // Send OP_IDENTIFY (Opcode 2)
+                                        let identify = json!({
+                                            "op": OP_IDENTIFY,
+                                            "d": {
+                                                "token": token,
+                                                "capabilities": 16381,
+                                                "properties": {
+                                                    "os": "Windows",
+                                                    "browser": "Chrome",
+                                                    "device": "",
+                                                    "system_locale": "pt-BR",
+                                                    "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                                                    "browser_version": "124.0.0.0",
+                                                    "os_version": "10",
+                                                    "release_channel": "stable",
+                                                    "client_build_number": 287661
+                                                },
+                                                "presence": {
+                                                    "status": initial_status.as_str(),
+                                                    "since": 0,
+                                                    "activities": [],
+                                                    "afk": false
+                                                },
+                                                "compress": false,
+                                                "client_state": {
+                                                    "guild_versions": {},
+                                                    "highest_last_message_id": "0",
+                                                    "read_state_version": 0,
+                                                    "user_guild_settings_version": -1,
+                                                    "user_settings_version": -1,
+                                                    "private_channels_version": "0",
+                                                    "api_code_version": 0
+                                                }
+                                            }
+                                        });
+                                        let msg = Message::Text(identify.to_string());
+                                        if ws_tx.send(msg).await.is_err() {
+                                            return GatewayExit::Error("WS send identify failed".into());
+                                        }
+                                        identified = true;
+                                        log::info!("[gateway] IDENTIFY sent (status={})", initial_status.as_str());
                                     }
-                                    identified = true;
-                                    log::info!("[gateway] IDENTIFY sent (status={})", initial_status.as_str());
                                 }
                             }
                             OP_HEARTBEAT_ACK => {
-                                log::debug!("[gateway] heartbeat ACK");
+                                ack_received = true;
+                                missed_acks = 0;
+                                log::debug!("[gateway] heartbeat ACK received");
+                            }
+                            OP_RECONNECT => {
+                                log::info!("[gateway] OP_RECONNECT (Opcode 7) received, reconnecting gracefully...");
+                                return GatewayExit::Error("OP_RECONNECT received".into());
+                            }
+                            OP_INVALID_SESSION => {
+                                let resumable = payload["d"].as_bool().unwrap_or(false);
+                                log::warn!("[gateway] OP_INVALID_SESSION (Opcode 9) received, resumable={}", resumable);
+                                if !resumable {
+                                    *session_id = None;
+                                    *sequence = None;
+                                    *resume_gateway_url = None;
+                                }
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                return GatewayExit::Error("OP_INVALID_SESSION received".into());
                             }
                             OP_DISPATCH => {
                                 let t = payload["t"].as_str().unwrap_or("");
@@ -359,12 +416,22 @@ async fn run_gateway_session(
                                     use tauri::Emitter;
 
                                     if let Some(sid) = payload["d"]["session_id"].as_str() {
+                                        *session_id = Some(sid.to_string());
                                         if let Some(app_handle) = app.as_ref() {
                                             let _ = app_handle.emit("gateway-session", serde_json::json!({
                                                 "account_id": account_id,
                                                 "session_id": sid
                                             }));
                                         }
+                                    }
+
+                                    if let Some(res_url) = payload["d"]["resume_gateway_url"].as_str() {
+                                        let formatted_url = if res_url.contains("?") {
+                                            res_url.to_string()
+                                        } else {
+                                            format!("{}/?v=10&encoding=json", res_url.trim_end_matches('/'))
+                                        };
+                                        *resume_gateway_url = Some(formatted_url);
                                     }
 
                                     if let Some(app_handle) = app {
@@ -391,6 +458,8 @@ async fn run_gateway_session(
                                             let _ = app_handle.emit("gateway-presences", event_payload);
                                         }
                                     }
+                                } else if t == "RESUMED" {
+                                    log::info!("[gateway] Session RESUMED successfully!");
                                 } else if t == "READY_SUPPLEMENTAL" {
                                     println!("[gateway] READY_SUPPLEMENTAL received");
                                     use tauri::Emitter;
@@ -451,12 +520,17 @@ async fn run_gateway_session(
                                         let _ = app_handle.emit("gateway-voice-server", event_payload);
                                     }
                                 } else if t == "PRESENCE_UPDATE" {
-                                    // println!("[gateway] PRESENCE_UPDATE for {}", payload["d"]["user"]["id"]);
                                     {
-                                        let mut cache = cached_presences.lock().unwrap();
-                                        if let Some(list) = cache.get_mut(account_id) {
-                                            let user_id = payload["d"]["user"]["id"].as_str().unwrap_or("");
-                                            if let Some(pos) = list.iter().position(|p| p["user"]["id"].as_str().unwrap_or("") == user_id) {
+                                        let user_id = payload["d"]["user"]["id"].as_str()
+                                            .or_else(|| payload["d"]["user_id"].as_str())
+                                            .unwrap_or("");
+                                        if !user_id.is_empty() {
+                                            let mut cache = cached_presences.lock().unwrap();
+                                            let list = cache.entry(account_id.to_string()).or_default();
+                                            if let Some(pos) = list.iter().position(|p| {
+                                                let pid = p["user"]["id"].as_str().or_else(|| p["user_id"].as_str()).unwrap_or("");
+                                                pid == user_id
+                                            }) {
                                                 list[pos] = payload["d"].clone();
                                             } else {
                                                 list.push(payload["d"].clone());
@@ -517,12 +591,23 @@ async fn run_gateway_session(
                                     }
                                 } else if t == "MESSAGE_CREATE" {
                                     use tauri::Emitter;
+
                                     if let Some(app_handle) = app {
                                         let event_payload = json!({
                                             "account_id": account_id,
                                             "message": payload["d"]
                                         });
-                                        let _ = app_handle.emit("gateway-message", event_payload);
+                                        let _ = app_handle.emit("gateway-message", event_payload.clone());
+                                    }
+                                } else if t == "RELATIONSHIP_ADD" || t == "RELATIONSHIP_REMOVE" {
+                                    use tauri::Emitter;
+                                    if let Some(app_handle) = app {
+                                        let event_payload = json!({
+                                            "account_id": account_id,
+                                            "event_type": t,
+                                            "relationship": payload["d"]
+                                        });
+                                        let _ = app_handle.emit("gateway-relationship", event_payload);
                                     }
                                 }
                             }
@@ -543,11 +628,19 @@ async fn run_gateway_session(
 
             // Heartbeat tick
             _ = hb_rx.recv() => {
+                if !ack_received {
+                    missed_acks += 1;
+                    log::warn!("[gateway] Missed heartbeat ACK (count={}/{})", missed_acks, MAX_MISSED_ACKS);
+                    if missed_acks >= MAX_MISSED_ACKS {
+                        return GatewayExit::Error(format!("Missed {} heartbeat ACKs (zombie connection)", MAX_MISSED_ACKS));
+                    }
+                }
+                ack_received = false;
                 let hb = json!({ "op": OP_HEARTBEAT, "d": sequence });
                 if ws_tx.send(Message::Text(hb.to_string())).await.is_err() {
                     return GatewayExit::Error("WS heartbeat send failed".into());
                 }
-                log::debug!("[gateway] heartbeat sent");
+                log::debug!("[gateway] heartbeat sent (seq={:?})", sequence);
             }
 
             // Command from app

@@ -24,8 +24,9 @@ export function DiscordEmojiPicker({ accountId, onSelect, children }: Props) {
       const guild = guilds.find(g => g.id === guildId);
       const emojis = guildEmojisRaw[guildId] || [];
       const filtered = emojis.filter(e => {
-        if (!e.name) return false;
-        return e.name.toLowerCase().includes(search.toLowerCase());
+        const name = e.name || (Array.isArray((e as any).names) ? (e as any).names[0] : null);
+        if (!name) return false;
+        return name.toLowerCase().includes(search.toLowerCase());
       });
       return {
         id: guildId,
@@ -138,30 +139,36 @@ export function DiscordEmojiPicker({ accountId, onSelect, children }: Props) {
                       {g.name}
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-                      {g.emojis.map((e: any) => (
-                        <button 
-                          key={e.id} 
-                          onClick={() => {
-                            const isAnimated = e.imgUrl.includes(".gif");
-                            onSelect(`<${isAnimated ? "a" : ""}:${e.names[0]}:${e.id}>`);
-                            setOpen(false);
-                          }}
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            padding: 4,
-                            borderRadius: "var(--radius-sm)",
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                          className="hover-bg-modifier"
-                          title={`:${e.names[0]}:`}
-                        >
-                          <img src={e.imgUrl} alt={e.names[0]} style={{ width: 32, height: 32, objectFit: "contain" }} />
-                        </button>
-                      ))}
+                      {g.emojis.map((e: any) => {
+                        const emojiName = e.name || (Array.isArray(e.names) && e.names[0]) || "emoji";
+                        const isAnimated = typeof e.animated === 'boolean' ? e.animated : (e.imgUrl ? e.imgUrl.includes(".gif") : false);
+                        const emojiId = e.id || e.unified || "";
+                        const imgUrl = e.imgUrl || (emojiId ? `https://cdn.discordapp.com/emojis/${emojiId}.${isAnimated ? "gif" : "png"}` : "");
+
+                        return (
+                          <button 
+                            key={emojiId || emojiName} 
+                            onClick={() => {
+                              onSelect(`<${isAnimated ? "a" : ""}:${emojiName}:${emojiId}>`);
+                              setOpen(false);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              padding: 4,
+                              borderRadius: "var(--radius-sm)",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                            className="hover-bg-modifier"
+                            title={`:${emojiName}:`}
+                          >
+                            <img src={imgUrl} alt={emojiName} style={{ width: 32, height: 32, objectFit: "contain" }} />
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 ))

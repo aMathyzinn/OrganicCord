@@ -10,6 +10,7 @@ interface AvatarProps {
   color?: string;
   showStatus?: boolean;
   status?: "online" | "idle" | "dnd" | "offline";
+  square?: boolean;
   style?: React.CSSProperties;
 }
 
@@ -29,11 +30,13 @@ export function Avatar({
   color = "var(--brand-500)",
   showStatus = false,
   status = "offline",
+  square = false,
   style,
 }: AvatarProps) {
   const [imgError, setImgError] = useState(false);
   const url = getAvatarUrl(userId, avatarHash, size * 2);
   const initials = getInitials(username);
+  const radius = square ? "var(--radius-md)" : "50%";
 
   return (
     <div
@@ -42,7 +45,7 @@ export function Avatar({
         width: size,
         height: size,
         flexShrink: 0,
-        borderRadius: showStatus || avatarDecoration ? "50%" : "var(--radius-md)",
+        borderRadius: radius,
         ...style,
       }}
     >
@@ -57,7 +60,7 @@ export function Avatar({
             setImgError(true);
           }}
           style={{
-            borderRadius: showStatus || avatarDecoration ? "50%" : "var(--radius-md)",
+            borderRadius: radius,
             objectFit: "cover",
             display: "block",
           }}
@@ -67,7 +70,7 @@ export function Avatar({
           style={{
             width: size,
             height: size,
-            borderRadius: showStatus || avatarDecoration ? "50%" : "var(--radius-md)",
+            borderRadius: radius,
             background: color,
             display: "flex",
             alignItems: "center",

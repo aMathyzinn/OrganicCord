@@ -1,6 +1,18 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { load } from "@tauri-apps/plugin-store";
+import { applyTheme } from "@/lib/themeManager";
+
+export type ThemeId = "dark" | "light" | "midnight" | "system" | "custom" | string;
+export type DisplayMode = "cozy" | "compact";
+
+export interface CustomThemeColors {
+  bgPrimary: string;
+  bgSecondary: string;
+  bgTertiary: string;
+  brandColor: string;
+  textColor: string;
+}
 
 export interface AppSettings {
   desktopNotifications: boolean;
@@ -12,6 +24,17 @@ export interface AppSettings {
   soundMuteToggle: boolean;
   allowServerDMs: boolean;
   filterExplicitDMs: boolean;
+
+  // Personalizações de Aparência
+  theme: ThemeId;
+  customThemeColors?: CustomThemeColors;
+  appIcon: string;
+  displayMode: DisplayMode;
+  fontSize: number;
+  messageSpacing: number;
+  syncThemeWithOS: boolean;
+  applyOtherUsersThemes: boolean;
+  streamerMode: boolean;
 }
 
 const defaultSettings: AppSettings = {
@@ -24,6 +47,15 @@ const defaultSettings: AppSettings = {
   soundMuteToggle: true,
   allowServerDMs: true,
   filterExplicitDMs: true,
+
+  theme: "midnight",
+  appIcon: "dark_mono",
+  displayMode: "cozy",
+  fontSize: 15,
+  messageSpacing: 16,
+  syncThemeWithOS: false,
+  applyOtherUsersThemes: false,
+  streamerMode: false,
 };
 
 let storeCache: any = null;
@@ -52,12 +84,14 @@ export const useSettingsStore = create<SettingsStore>()(
           s.settings = { ...defaultSettings, ...savedSettings };
         });
       }
+      applyTheme(get().settings);
     },
 
     updateSetting: (key, value) => {
       set((s) => {
         s.settings[key] = value;
       });
+      applyTheme(get().settings);
       // Persist
       getStore().then(store => {
         store.set("app_settings", get().settings);

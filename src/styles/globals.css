@@ -5,17 +5,17 @@
 
 :root {
   /* Backgrounds */
-  --bg-primary: #313338;
-  --bg-secondary: #2b2d31;
-  --bg-tertiary: #1e1f22;
-  --bg-accent: #404249;
-  --bg-float: #111214;
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-tertiary: #000000;
+  --bg-accent: #161616;
+  --bg-float: #111111;
   --bg-floating: var(--bg-float);
-  --bg-message-hover: rgba(4, 4, 5, 0.07);
+  --bg-message-hover: rgba(255, 255, 255, 0.04);
 
   /* Text */
-  --text-normal: #dbdee1;
-  --text-muted: #949ba4;
+  --text-normal: #f6f6f7;
+  --text-muted: #80848e;
   --text-link: #00a8fc;
   --text-positive: #23a55a;
   --text-warning: #f0b232;
@@ -136,12 +136,33 @@ select {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
+  cursor: pointer;
+  transition: border-color 150ms ease;
+}
+
+select:hover {
+  border-color: var(--brand-500);
 }
 
 /* Permite selecionar texto nas áreas de chat */
 .selectable {
   user-select: text;
   cursor: text;
+}
+
+/* --- Global Interactive Feedback & Micro-animations --- */
+button,
+[role="button"],
+a,
+input[type="submit"],
+input[type="button"] {
+  cursor: pointer;
+  transition: transform 120ms ease, background 150ms ease, color 150ms ease, border-color 150ms ease, opacity 150ms ease, box-shadow 150ms ease;
+}
+
+button:not(:disabled):active,
+[role="button"]:not(:disabled):active {
+  transform: scale(0.96);
 }
 
 /* --- Animações globais --- */
@@ -187,7 +208,7 @@ select {
 
 /* --- Interactive hover utilities --- */
 .hoverable {
-  transition: background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out, opacity 120ms ease-out;
+  transition: background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out, opacity 120ms ease-out, transform 120ms ease-out;
   cursor: pointer;
 }
 
@@ -215,17 +236,75 @@ select {
 
 .interactive:active {
   color: var(--interactive-active);
+  transform: scale(0.96);
 }
 
 /* --- Hover background utilities --- */
-.hover-bg-accent { transition: background 120ms ease-out; }
-.hover-bg-accent:hover { background: var(--bg-accent); }
+.hover-bg-modifier {
+  transition: background 120ms ease-out, color 120ms ease-out, transform 120ms ease-out;
+}
+.hover-bg-modifier:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: var(--text-normal);
+}
+.hover-bg-modifier:active {
+  background: rgba(255, 255, 255, 0.14) !important;
+  transform: scale(0.98);
+}
 
-.hover-bg-subtle { transition: background 120ms ease-out; }
-.hover-bg-subtle:hover { background: rgba(255, 255, 255, 0.06); }
+.hover-bg-accent { transition: background 120ms ease-out, color 120ms ease-out, transform 120ms ease-out; }
+.hover-bg-accent:hover { background: var(--bg-accent) !important; color: var(--text-normal) !important; }
+.hover-bg-accent:active { transform: scale(0.95); }
 
-.hover-brand-dark { transition: background 150ms ease-out; }
+.hover-bg-subtle { transition: background 120ms ease-out, color 120ms ease-out; }
+.hover-bg-subtle:hover { background: rgba(255, 255, 255, 0.06) !important; color: var(--interactive-hover) !important; }
+
+.hover-brand-dark { transition: background 150ms ease-out, transform 120ms ease-out; }
 .hover-brand-dark:hover { background: var(--brand-560); }
+.hover-brand-dark:active { transform: scale(0.96); }
+
+/* --- Icon buttons spring scale --- */
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--interactive-normal);
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 150ms ease, color 150ms ease, transform 150ms ease;
+  cursor: pointer;
+}
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--interactive-hover);
+  transform: scale(1.08);
+}
+.icon-btn:active {
+  color: var(--interactive-active);
+  transform: scale(0.92);
+}
+
+/* --- Brand Button --- */
+.brand-btn {
+  background: var(--brand-500);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease, transform 120ms ease, box-shadow 150ms ease;
+}
+.brand-btn:hover {
+  background: var(--brand-560);
+  box-shadow: 0 4px 12px rgba(88, 101, 242, 0.4);
+}
+.brand-btn:active {
+  background: var(--brand-600);
+  transform: scale(0.96);
+}
 
 /* --- Hover color utilities --- */
 .hover-color-normal { transition: color 120ms ease-out; }
@@ -242,24 +321,44 @@ select {
 .hover-border-brand:hover { border-color: var(--brand-500); }
 
 /* --- Hover underline (for links) --- */
-.hover-underline { text-decoration: none; transition: text-decoration 120ms; }
-.hover-underline:hover { text-decoration: underline; }
+.hover-underline { text-decoration: none; transition: text-decoration 120ms, color 120ms; }
+.hover-underline:hover { text-decoration: underline; color: var(--interactive-active); }
 
 /* --- Hover danger background --- */
-.hover-danger-bg { transition: background 120ms ease-out; }
-.hover-danger-bg:hover { background: rgba(237, 66, 69, 0.15); }
+.hover-danger-bg { transition: background 120ms ease-out, transform 120ms ease-out; }
+.hover-danger-bg:hover { background: rgba(237, 66, 69, 0.18) !important; color: var(--text-danger) !important; }
+.hover-danger-bg:active { transform: scale(0.97); }
 
 /* --- Account pill hover (Discord-style circle → rounded square) --- */
 .account-pill {
-  transition: border-radius 200ms ease-out, background 150ms ease-out;
+  transition: border-radius 200ms ease-out, background 150ms ease-out, transform 120ms ease-out;
 }
 .account-pill:hover {
   border-radius: var(--radius-md);
+  transform: scale(1.04);
+}
+.account-pill:active {
+  transform: scale(0.94);
+}
+
+/* --- Add server button hover --- */
+.add-server-btn {
+  transition: background 180ms ease-out, color 180ms ease-out, border-radius 180ms ease-out, transform 120ms ease-out, box-shadow 180ms ease-out;
+  color: var(--status-online);
+}
+.add-server-btn:hover {
+  background: var(--status-online) !important;
+  color: #ffffff !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: 0 4px 14px rgba(35, 165, 90, 0.4);
+}
+.add-server-btn:active {
+  transform: scale(0.92);
 }
 
 /* --- Add account button hover --- */
 .add-account-btn {
-  transition: background 150ms ease-out, color 150ms ease-out, border-radius 200ms ease-out;
+  transition: background 150ms ease-out, color 150ms ease-out, border-radius 200ms ease-out, transform 120ms ease-out;
   color: var(--status-online);
 }
 .add-account-btn:hover {
@@ -267,29 +366,38 @@ select {
   color: #fff;
   border-radius: var(--radius-md);
 }
+.add-account-btn:active {
+  transform: scale(0.95);
+}
 
 /* --- Title bar button base --- */
 .titlebar-btn {
-  transition: background 150ms ease-out, color 150ms ease-out;
+  transition: background 150ms ease-out, color 150ms ease-out, transform 100ms ease-out;
 }
 .titlebar-btn:hover {
   color: #fff;
 }
+.titlebar-btn:active {
+  transform: scale(0.9);
+}
 
 /* --- Cancel reply button --- */
 .cancel-reply-btn {
-  transition: color 120ms ease-out;
+  transition: color 120ms ease-out, transform 100ms ease-out;
 }
 .cancel-reply-btn:hover {
   color: var(--text-normal);
+  transform: scale(1.1);
 }
 
 .dm-button {
   background: transparent;
+  transition: background 120ms ease-out, color 120ms ease-out, transform 100ms ease-out;
 }
 
 .dm-button .close-dm-btn {
   opacity: 0;
+  transition: opacity 120ms ease-out, background 120ms ease-out;
 }
 
 .dm-button:hover .close-dm-btn {
@@ -298,19 +406,20 @@ select {
 
 .dm-button .close-dm-btn:hover {
   color: var(--text-normal) !important;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.15);
 }
-
 
 /* Header Icon Buttons */
 .header-icon-button {
   color: var(--interactive-normal);
-  transition: color 0.15s ease-out;
+  transition: color 0.15s ease-out, transform 0.12s ease-out;
 }
 .header-icon-button:hover:not(:disabled) {
   color: var(--interactive-hover);
+  transform: scale(1.08);
 }
 .header-icon-button:active:not(:disabled) {
   color: var(--interactive-active);
+  transform: scale(0.92);
 }
 

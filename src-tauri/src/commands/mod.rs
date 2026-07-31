@@ -8,3 +8,4 @@ pub mod presence;
 pub mod auth_webview;
 pub mod voice;
 pub mod audio;
+pub mod unread;

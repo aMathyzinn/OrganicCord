@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import type { DiscordMessage, DiscordChannel } from "@/types";
 import { Avatar } from "@/components/ui/Avatar";
 import { formatTimestamp, getDisplayName } from "@/lib/utils";
@@ -9,7 +9,7 @@ import { EmbedRenderer } from "./EmbedRenderer";
 import { PollRenderer } from "./PollRenderer";
 import { MessageComponentsRenderer } from "./MessageComponentsRenderer";
 import { MessageContextMenu } from "@/components/ui/MessageContextMenu";
-import { Reply, Paperclip, X, SmilePlus, Phone, Pin, BarChart3, Check } from "lucide-react";
+import { Reply, Paperclip, X, SmilePlus, Phone, Pin, BarChart3, Check, Play, Pause, Volume2, Mic } from "lucide-react";
 import EmojiPicker, { Theme, EmojiClickData, Categories } from "emoji-picker-react";
 import * as Popover from "@radix-ui/react-popover";
 import { useMemo } from "react";
@@ -55,7 +55,8 @@ export function MessageItem({ message, isGrouped, isOwn, onReply, onDelete, chan
     let emojiStr = emojiData.emoji;
     if (emojiData.isCustom) {
       const customEmoji = emojiData as any;
-      emojiStr = `${emojiData.names[0]}:${emojiData.unified || customEmoji.id}`;
+      const emojiName = emojiData.names?.[0] || customEmoji.name || "emoji";
+      emojiStr = `${emojiName}:${emojiData.unified || customEmoji.id}`;
     }
     if (activeAccountId && activeChannelId) {
       await addReaction(activeAccountId, activeChannelId, message.id, emojiStr);
@@ -343,7 +344,7 @@ export function MessageItem({ message, isGrouped, isOwn, onReply, onDelete, chan
         {/* Anexos */}
         {message.attachments.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <AttachmentList attachments={message.attachments} />
+            <AttachmentList attachments={message.attachments} flags={message.flags} />
             {(!message.content || message.content.trim().length === 0) && (
               <em style={{ fontSize: 11, color: "var(--text-muted)", opacity: 0.7 }}>
                 [{message.attachments.length} anexo(s)]
@@ -524,16 +525,220 @@ function ReplyPreview({ message, channels }: { message: DiscordMessage; channels
   );
 }
 
+function decodeWaveform(waveformBase64?: string): number[] {
+  if (!waveformBase64) {
+    return [
+      15, 30, 50, 85, 115, 70, 45, 95, 140, 185, 125, 80, 50, 95, 165, 225,
+      195, 135, 90, 55, 110, 155, 95, 65, 120, 175, 135, 75, 45, 30, 20, 15
+    ];
+  }
+  try {
+    const raw = atob(waveformBase64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+      bytes[i] = raw.charCodeAt(i);
+    }
+    const barCount = 32;
+    const step = bytes.length / barCount;
+    const result: number[] = [];
+    for (let i = 0; i < barCount; i++) {
+      const startIdx = Math.floor(i * step);
+      const endIdx = Math.floor((i + 1) * step);
+      let maxVal = 0;
+      for (let j = startIdx; j < endIdx && j < bytes.length; j++) {
+        if (bytes[j] > maxVal) maxVal = bytes[j];
+      }
+      result.push(maxVal || 20);
+    }
+    return result;
+  } catch (e) {
+    return [
+      20, 40, 60, 80, 100, 120, 140, 160, 140, 120, 100, 80, 60, 40, 20, 40,
+      60, 80, 100, 120, 140, 160, 140, 120, 100, 80, 60, 40, 20, 30, 20, 10
+    ];
+  }
+}
+
+function formatVoiceTime(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) return "0:00";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function VoiceMessagePlayer({ attachment }: { attachment: import("@/types").Attachment }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(attachment.duration_secs || 0);
+  const [playbackRate, setPlaybackRate] = useState<number>(1);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const samples = useMemo(() => decodeWaveform(attachment.waveform), [attachment.waveform]);
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play().catch(console.error);
+      setIsPlaying(true);
+    }
+  };
+
+  const handleSeek = (index: number) => {
+    if (!audioRef.current || samples.length === 0) return;
+    const totalSecs = duration || audioRef.current.duration || 1;
+    const newTime = (index / samples.length) * totalSecs;
+    audioRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const cycleSpeed = () => {
+    const nextSpeed = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
+    setPlaybackRate(nextSpeed);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextSpeed;
+    }
+  };
+
+  const currentRatio = duration > 0 ? currentTime / duration : 0;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        background: "var(--bg-secondary)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius-lg)",
+        padding: "10px 14px",
+        width: 320,
+        maxWidth: "100%",
+        margin: "6px 0",
+        userSelect: "none",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+      }}
+    >
+      <audio
+        ref={audioRef}
+        src={attachment.url}
+        onTimeUpdate={() => {
+          if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
+        }}
+        onLoadedMetadata={() => {
+          if (audioRef.current) {
+            setDuration(attachment.duration_secs || audioRef.current.duration || 0);
+          }
+        }}
+        onEnded={() => {
+          setIsPlaying(false);
+          setCurrentTime(0);
+        }}
+      />
+
+      {/* Play/Pause Button */}
+      <button
+        onClick={togglePlay}
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: "50%",
+          background: "var(--brand-500)",
+          border: "none",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          flexShrink: 0,
+          transition: "transform 100ms ease",
+        }}
+        className="hover-opacity"
+      >
+        {isPlaying ? <Pause size={18} fill="#fff" /> : <Play size={18} fill="#fff" style={{ marginLeft: 2 }} />}
+      </button>
+
+      {/* Waveform Visualization Bars */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 3,
+          flex: 1,
+          height: 32,
+          cursor: "pointer",
+        }}
+      >
+        {samples.map((sample, idx) => {
+          const heightPercent = Math.max(15, Math.min(100, (sample / 255) * 100));
+          const isPlayed = idx / samples.length <= currentRatio;
+          return (
+            <div
+              key={idx}
+              onClick={() => handleSeek(idx)}
+              style={{
+                flex: 1,
+                height: `${heightPercent}%`,
+                background: isPlayed ? "var(--brand-500)" : "var(--interactive-muted)",
+                borderRadius: 2,
+                transition: "background 100ms, height 100ms",
+              }}
+            />
+          );
+        })}
+      </div>
+
+      {/* Time & Speed controls */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", fontFamily: "monospace" }}>
+          {formatVoiceTime(isPlaying ? currentTime : duration)}
+        </span>
+        <button
+          onClick={cycleSpeed}
+          style={{
+            background: "var(--bg-tertiary)",
+            border: "none",
+            borderRadius: 10,
+            padding: "1px 6px",
+            fontSize: 10,
+            fontWeight: 700,
+            color: "var(--text-muted)",
+            cursor: "pointer",
+          }}
+          title="Velocidade de reprodução"
+        >
+          {playbackRate}x
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AttachmentList({
   attachments,
+  flags,
 }: {
   attachments: import("@/types").Attachment[];
+  flags?: number;
 }) {
   const { setFocusedImage } = useNavigationStore();
 
   return (
     <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
       {attachments.map((att) => {
+        const isVoiceMsg =
+          !!att.waveform ||
+          !!att.duration_secs ||
+          (flags && (flags & 8192) !== 0) ||
+          att.filename.includes("voice-message") ||
+          att.content_type?.startsWith("audio/");
+
+        if (isVoiceMsg) {
+          return <VoiceMessagePlayer key={att.id} attachment={att} />;
+        }
+
         const isImage = att.content_type?.startsWith("image/");
         return isImage ? (
           <img

@@ -4,6 +4,7 @@ import { immer } from "zustand/middleware/immer";
 import type { StoredAccount, AccountSession, SessionStatus } from "@/types";
 import * as api from "@/lib/tauri";
 import { useNavigationStore } from "./navigationStore";
+import { useDiscordStore } from "./discordStore";
 
 export type PresenceStatus = "online" | "idle" | "dnd" | "invisible";
 
@@ -40,6 +41,7 @@ interface AccountState {
   toggleStealth: () => void;
   toggleHideAccount: (accountId: string) => void;
   logoutAccount: (accountId: string) => Promise<void>;
+  updateAccountInfo: (accountId: string, partial: Partial<StoredAccount>) => void;
 }
 
 export const useAccountStore = create<AccountState>()(
@@ -164,10 +166,27 @@ export const useAccountStore = create<AccountState>()(
 
       setPresenceStatus: async (accountId: string, status: PresenceStatus) => {
         set((s) => { s.presenceStatus[accountId] = status; });
-        // Update live gateway session if connected
+
+        // 1. Send REST API PATCH to Discord (/users/@me/settings) to persist and broadcast status across all Discord clients (official desktop, mobile, web)
+        await api.setStatus(accountId, status).catch((e) => {
+          console.warn("[presence] setStatus REST API failed:", e);
+        });
+
+        // 2. Update live WebSocket gateway session
         await api.gatewaySetStatus(accountId, status).catch((e) => {
           console.warn("[presence] gateway_set_status failed:", e);
         });
+
+        // 3. Update local discordStore cache for instant UI feedback
+        const account = get().accounts.find(a => a.id === accountId);
+        if (account) {
+          useDiscordStore.getState().updatePresence(accountId, {
+            user: { id: account.user_id },
+            status: status === "invisible" ? "offline" : status,
+            activities: [],
+            client_status: {},
+          });
+        }
       },
 
       setCustomStatus: async (accountId: string, status: CustomStatus) => {
@@ -198,6 +217,13 @@ export const useAccountStore = create<AccountState>()(
         const idx = s.hiddenAccountIds.indexOf(accountId);
         if (idx === -1) s.hiddenAccountIds.push(accountId);
         else s.hiddenAccountIds.splice(idx, 1);
+      }),
+
+      updateAccountInfo: (accountId: string, partial: Partial<StoredAccount>) => set((s) => {
+        const acc = s.accounts.find((a) => a.id === accountId);
+        if (acc) {
+          Object.assign(acc, partial);
+        }
       }),
     })),
     {

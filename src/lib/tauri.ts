@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+export { invoke };
 import type {
   StoredAccount,
   AccountSession,
@@ -52,6 +53,18 @@ export const getGuilds = (accountId: string) =>
 export const getRelationships = (accountId: string) =>
   invoke<DiscordRelationship[]>("get_relationships", { accountId });
 
+export const removeRelationship = (accountId: string, userId: string) =>
+  invoke<void>("remove_relationship", { accountId, userId });
+
+export const blockUser = (accountId: string, userId: string) =>
+  invoke<void>("block_user", { accountId, userId });
+
+export const setUserNote = (accountId: string, userId: string, note: String) =>
+  invoke<void>("set_user_note", { accountId, userId, note });
+
+export const createChannelInvite = (accountId: string, channelId: string) =>
+  invoke<any>("create_channel_invite", { accountId, channelId });
+
 export const getGatewayPresences = (accountId: string) =>
   invoke<any[]>("get_gateway_presences", { accountId });
 
@@ -63,6 +76,14 @@ export const getChannels = (accountId: string, guildId: string) =>
 
 export const getForumThreads = (accountId: string, channelId: string, guildId: string) =>
   invoke<any>("get_forum_threads", { accountId, channelId, guildId });
+
+export const createForumPost = (
+  accountId: string,
+  channelId: string,
+  title: string,
+  content: string,
+  appliedTags: string[]
+) => invoke<any>("create_forum_post", { accountId, channelId, title, content, appliedTags });
 
 export const getRecentMentions = (accountId: string) =>
   invoke<DiscordMessage[]>("get_recent_mentions", { accountId });
@@ -107,6 +128,23 @@ export const deleteMessage = (
   channelId: string,
   messageId: string
 ) => invoke<void>("delete_message", { accountId, channelId, messageId });
+
+export const sendVoiceMessage = (
+  accountId: string,
+  channelId: string,
+  audioData: number[],
+  durationSecs: number,
+  waveform: string,
+  replyTo?: string
+) =>
+  invoke<DiscordMessage>("send_voice_message", {
+    accountId,
+    channelId,
+    audioData,
+    durationSecs,
+    waveform,
+    replyTo: replyTo ?? null,
+  });
 
 export const sendInteraction = (
   accountId: string,
@@ -185,6 +223,17 @@ export const getUserInfo = (accountId: string) =>
 
 export const getSelfProfile = (accountId: string) =>
   invoke<DiscordUser>("get_self_profile", { accountId });
+
+export interface UpdateProfileParams {
+  global_name?: string | null;
+  bio?: string | null;
+  avatar?: string | null;
+  banner?: string | null;
+  accent_color?: number | null;
+}
+
+export const updateUserProfile = (accountId: string, payload: UpdateProfileParams) =>
+  invoke<DiscordUser>("update_user_profile", { accountId, payload });
 
 export const setStatus = (accountId: string, status: string) =>
   invoke<void>("set_status", { accountId, status });

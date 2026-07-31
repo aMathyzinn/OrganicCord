@@ -24,13 +24,26 @@ export function getAvatarUrl(
   return `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${ext}?size=${validSize}`;
 }
 
+export function getBannerUrl(
+  userId: string,
+  bannerHash: string | null,
+  size = 600
+): string | null {
+  if (!bannerHash) return null;
+  const ext = bannerHash.startsWith("a_") ? "gif" : "webp";
+  const validSize = getValidDiscordSize(size);
+  return `https://cdn.discordapp.com/banners/${userId}/${bannerHash}.${ext}?size=${validSize}`;
+}
+
 export function getGuildIconUrl(
   guildId: string,
   iconHash: string | null,
-  size = 96
+  size = 96,
+  animate = true
 ): string | null {
   if (!iconHash) return null;
-  const ext = iconHash.startsWith("a_") ? "gif" : "webp";
+  const isAnimated = iconHash.startsWith("a_");
+  const ext = isAnimated && animate ? "gif" : "webp";
   const validSize = getValidDiscordSize(size);
   return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.${ext}?size=${validSize}`;
 }

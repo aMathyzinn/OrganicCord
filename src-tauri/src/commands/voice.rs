@@ -160,6 +160,30 @@ pub async fn start_voice_connection(
                             } else if op == 4 {
                                 // SESSION_DESCRIPTION
                                 log::info!("[voice] SESSION_DESCRIPTION recebido!");
+                                let d = &payload["d"];
+                                let secret_key: Vec<u8> = d["secret_key"]
+                                    .as_array()
+                                    .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect())
+                                    .unwrap_or_default();
+
+                                let ssrc = *ssrc_ref.lock().await;
+
+                                // 1. Envia Opcode 5 (Speaking) no Voice WS para sinalizar transmissão
+                                let speaking_payload = json!({
+                                    "op": 5,
+                                    "d": {
+                                        "speaking": 1,
+                                        "delay": 0,
+                                        "ssrc": ssrc
+                                    }
+                                });
+                                if let Err(e) = ws_tx.lock().await.send(Message::Text(speaking_payload.to_string())).await {
+                                    log::error!("[voice] Erro ao enviar OP 5 (Speaking): {}", e);
+                                } else {
+                                    log::info!("[voice] OP 5 (Speaking=1) enviado com sucesso para SSRC {}", ssrc);
+                                }
+
+                                // 2. Inicializa DAVE MLS Session
                                 let protocol_version = NonZeroU16::new(DAVE_PROTOCOL_VERSION).unwrap();
                                 let my_user_id = user_id.parse::<u64>().unwrap_or(0);
                                 let my_channel_id = channel_id.parse::<u64>().unwrap_or(0);
@@ -186,25 +210,55 @@ pub async fn start_voice_connection(
                                 let (audio_tx, audio_rx) = std::sync::mpsc::channel::<()>();
                                 _audio_keeper = Some(audio_tx);
                                 
-                                if let (Some(socket), target_addr, ssrc) = (
+                                if let (Some(socket), target_addr) = (
                                     udp_socket_ref.lock().await.clone(),
                                     target_addr_ref.lock().await.clone(),
-                                    *ssrc_ref.lock().await
                                 ) {
                                     let input_id_clone = input_device_id.clone();
                                     let session_clone = session.clone();
+                                    let secret_key_capture = secret_key.clone();
+                                    
+                                    // Microfone (Input capture & AES-GCM transport stream)
                                     std::thread::spawn(move || {
-                                        match crate::commands::audio::start_audio_capture(socket, target_addr, ssrc, session_clone, input_id_clone) {
+                                        match crate::commands::audio::start_audio_capture(
+                                            socket,
+                                            target_addr,
+                                            ssrc,
+                                            secret_key_capture,
+                                            session_clone,
+                                            input_id_clone
+                                        ) {
                                             Ok(_stream) => {
-                                                log::info!("[audio] Stream iniciada. Mantendo thread viva...");
-                                                let _ = audio_rx.recv(); // Bloqueia até o canal ser fechado ou enviar mensagem
-                                                log::info!("[audio] Stream encerrada.");
+                                                log::info!("[audio] Stream de captura iniciada. Mantendo thread viva...");
+                                                let _ = audio_rx.recv();
+                                                log::info!("[audio] Stream de captura encerrada.");
                                             }
                                             Err(e) => {
-                                                log::error!("[voice] Erro ao iniciar áudio: {}", e);
+                                                log::error!("[voice] Erro ao iniciar captura de áudio: {}", e);
                                             }
                                         }
                                     });
+
+                                    // Alto-falantes (Output playback stream & UDP recv loop)
+                                    if let Some(socket_recv) = udp_socket_ref.lock().await.clone() {
+                                        let session_recv = session.clone();
+                                        let secret_key_playback = secret_key.clone();
+                                        std::thread::spawn(move || {
+                                            match crate::commands::audio::start_audio_playback(
+                                                socket_recv,
+                                                secret_key_playback,
+                                                session_recv,
+                                                None
+                                            ) {
+                                                Ok(_playback_stream) => {
+                                                    log::info!("[audio] Stream de reprodução de áudio iniciada.");
+                                                }
+                                                Err(e) => {
+                                                    log::error!("[voice] Erro ao iniciar reprodução de áudio: {}", e);
+                                                }
+                                            }
+                                        });
+                                    }
                                 }
 
                             } else if op == 27 {

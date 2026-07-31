@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { initNotificationSystem, triggerDesktopNotification } from "@/lib/notifications";
 import { useAccountStore } from "@/stores/accountStore";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useNotificationStore } from "@/stores/notificationStore";
 import { useVoiceStore } from "@/stores/voiceStore";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { AddAccountModal } from "@/components/auth/AddAccountModal";
@@ -13,6 +14,7 @@ import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { OrganicMark } from "@/components/ui/OrganicMark";
 import { ToastContainer, toast } from "@/components/ui/Toast";
 import { UserProfileModal } from "@/components/profile/UserProfileModal";
+import { ExternalLinkModal } from "@/components/ui/ExternalLinkModal";
 import * as Tooltip from "@radix-ui/react-tooltip";
 
 export default function App() {
@@ -22,6 +24,11 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [showAddAccount, setShowAddAccount] = useState(false);
 
+  // Inicializa o sistema de notificações
+  useEffect(() => {
+    initNotificationSystem();
+  }, []);
+
   // Gateway message listener
   useEffect(() => {
     const unlistenMessagePromise = listen<{ account_id: string; message: any }>("gateway-message", (event) => {
@@ -29,7 +36,6 @@ export default function App() {
       if (message && message.channel_id) {
         useDiscordStore.getState().prependMessage(message.channel_id, message);
         
-        // Check if we need to increment unread count
         const activeChannelId = useNavigationStore.getState().activeChannelId;
         const activeAccountId = useNavigationStore.getState().activeAccountId;
         
@@ -37,35 +43,28 @@ export default function App() {
         const hasMention = account && message.mentions?.some((m: any) => m.id === account.user_id);
         const isFromMe = account && message.author?.id === account.user_id;
         
-        if (activeChannelId !== message.channel_id || activeAccountId !== account_id) {
-          useDiscordStore.getState().incrementUnread(account_id, message.channel_id, !!hasMention, message.guild_id);
-        }
+        const isFocused = document.hasFocus();
+        const isCurrentChannel = activeChannelId === message.channel_id && activeAccountId === account_id;
 
-        // Notification logic
-        const settings = useSettingsStore.getState().settings;
-        if (settings.desktopNotifications && !isFromMe && (hasMention || !message.guild_id)) {
-          if (!document.hasFocus() || activeChannelId !== message.channel_id || activeAccountId !== account_id) {
-            (async () => {
-              try {
-                let permissionGranted = await isPermissionGranted();
-                if (!permissionGranted) {
-                  const permission = await requestPermission();
-                  permissionGranted = permission === "granted";
-                }
-                if (permissionGranted) {
-                  const authorName = message.author?.global_name || message.author?.username || "Alguém";
-                  const title = hasMention ? `Nova menção de ${authorName}` : `Nova mensagem de ${authorName}`;
-                  sendNotification({
-                    title,
-                    body: message.content || "Enviou um anexo",
-                    icon: message.author?.avatar ? `https://cdn.discordapp.com/avatars/${message.author.id}/${message.author.avatar}.png` : undefined
-                  });
-                }
-              } catch (err) {
-                console.error("Failed to send notification:", err);
-              }
-            })();
+        if (!isCurrentChannel || !isFocused) {
+          const isMuted = useNotificationStore.getState().isMuted(message.guild_id, message.channel_id, message.author?.id);
+          
+          if (!isMuted) {
+            const effectiveLevel = useNotificationStore.getState().getEffectiveLevel(message.guild_id, message.channel_id);
+            
+            let shouldNotify = false;
+            if (effectiveLevel === "all") shouldNotify = true;
+            if (effectiveLevel === "mentions" && (hasMention || !message.guild_id)) shouldNotify = true;
+            if (effectiveLevel === "nothing") shouldNotify = false;
+            if (isFromMe) shouldNotify = false;
+            
+            if (shouldNotify) {
+              useDiscordStore.getState().incrementUnread(account_id, message.channel_id, !!hasMention, message.guild_id);
+              triggerDesktopNotification(account_id, message, !!hasMention);
+            }
           }
+        } else {
+          useDiscordStore.getState().clearUnread(account_id, message.channel_id, message.id);
         }
       }
     });
@@ -89,10 +88,15 @@ export default function App() {
 
     const unlistenPresencePromise = listen<{ account_id: string; presence: any }>("gateway-presence", (event) => {
       const { account_id, presence } = event.payload;
-      console.log("gateway-presence received", presence);
-      if (presence && presence.user && presence.user.id) {
+      if (presence) {
         useDiscordStore.getState().updatePresence(account_id, presence);
       }
+    });
+
+    const unlistenRelationshipPromise = listen<{ account_id: string }>("gateway-relationship", (event) => {
+      const { account_id } = event.payload;
+      console.log("gateway-relationship received for", account_id);
+      useDiscordStore.getState().fetchRelationships(account_id);
     });
 
     const unlistenPresencesPromise = listen<{ account_id: string; presences: any[] }>("gateway-presences", (event) => {
@@ -116,6 +120,7 @@ export default function App() {
         unlistenSessionPromise.then((f) => f()),
         unlistenGuildPromise.then((f) => f()),
         unlistenPresencePromise.then((f) => f()),
+        unlistenRelationshipPromise.then((f) => f()),
         unlistenPresencesPromise.then((f) => f()),
         unlistenTypingPromise.then((f) => f()),
       ]);
@@ -176,7 +181,27 @@ export default function App() {
       }
     };
     document.addEventListener("keydown", handler, true);
-    return () => document.removeEventListener("keydown", handler, true);
+    
+    // Clear unreads on focus if we have an active channel
+    const focusHandler = () => {
+      const activeChannelId = useNavigationStore.getState().activeChannelId;
+      const activeAccountId = useNavigationStore.getState().activeAccountId;
+      if (activeChannelId && activeAccountId) {
+        const msgs = useDiscordStore.getState().cache.messages[activeChannelId];
+        const newestReal = msgs?.find(m => !m.id.startsWith("local-"));
+        if (newestReal) {
+          useDiscordStore.getState().clearUnread(activeAccountId, activeChannelId, newestReal.id);
+        } else {
+          useDiscordStore.getState().clearUnread(activeAccountId, activeChannelId);
+        }
+      }
+    };
+    window.addEventListener("focus", focusHandler);
+    
+    return () => {
+      document.removeEventListener("keydown", handler, true);
+      window.removeEventListener("focus", focusHandler);
+    };
   }, [toggleStealth]);
 
   if (initializing) {
@@ -277,6 +302,7 @@ export default function App() {
       {/* Global Modals */}
       <UserProfileModal />
       <ToastContainer />
+      <ExternalLinkModal />
       </div>
     </Tooltip.Provider>
   );

@@ -13,7 +13,7 @@ import { AiConversationModal } from "@/components/ai/AiConversationModal";
 import { PinnedMessagesPopover } from "./PinnedMessagesPopover";
 import { SearchResultsSidebar } from "./SearchResultsSidebar";
 import type { DiscordMessage, ChannelType, DiscordChannel } from "@/types";
-import { Volume2, Drama, Megaphone, MessagesSquare, Bot, MessagesSquare as Conversations, Settings, Hash, ArrowLeft, Phone, Video, Pin, Users, Search } from "lucide-react";
+import { Volume2, Drama, Megaphone, MessagesSquare, Bot, MessagesSquare as Conversations, Settings, Hash, ArrowLeft, Phone, Video, Pin, Users, Search, Ban } from "lucide-react";
 import { useVoiceStore } from "@/stores/voiceStore";
 
 function getHeaderIcon(type: ChannelType): React.ReactNode {
@@ -50,8 +50,15 @@ export function ChatArea({ channelId, accountId }: Props) {
   // Carrega mensagens quando o canal muda (sempre busca fresh ao trocar de canal)
   useEffect(() => {
     prevChannelRef.current = channelId;
-    fetchMessages(accountId, channelId);
-    useDiscordStore.getState().clearUnread(accountId, channelId);
+    fetchMessages(accountId, channelId).then(() => {
+      const msgs = useDiscordStore.getState().cache.messages[channelId];
+      const newestReal = msgs?.find(m => !m.id.startsWith("local-"));
+      if (newestReal) {
+        useDiscordStore.getState().clearUnread(accountId, channelId, newestReal.id);
+      } else {
+        useDiscordStore.getState().clearUnread(accountId, channelId);
+      }
+    });
   }, [channelId, accountId]);
 
   // Polling: busca só mensagens mais novas que a última do cache (via after=<id>)
@@ -81,6 +88,11 @@ export function ChatArea({ channelId, accountId }: Props) {
           const sorted = [...toAdd].sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
           return { cache: { ...s.cache, messages: { ...s.cache.messages, [channelId]: [...sorted, ...dedupedCur] } } };
         });
+        
+        const sortedAdded = fresh.sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
+        if (sortedAdded.length > 0 && document.hasFocus()) {
+          useDiscordStore.getState().clearUnread(accountId, channelId, sortedAdded[0].id);
+        }
       } catch (e) {
         console.warn("[poll] erro ao buscar mensagens:", e);
       }
@@ -173,14 +185,68 @@ export function ChatArea({ channelId, accountId }: Props) {
 
           <TypingIndicator channelId={channelId} />
 
-          {/* Input */}
-          <MessageInput
-            channelId={channelId}
-            replyingTo={replyingTo}
-            onCancelReply={() => setReplyingTo(null)}
-            onSend={handleSend}
-            accountColor={account?.color}
-          />
+          {/* Input ou Banner de Usuário Bloqueado */}
+          {(() => {
+            const dms = cache.dms[accountId] ?? [];
+            const dmObj = dms.find((d) => d.id === channelId);
+            const dmRecipient = dmObj?.recipients?.[0];
+            const isRecipientBlocked = dmRecipient
+              ? cache.relationships[accountId]?.some((r) => r.user.id === dmRecipient.id && r.relationship_type === 2)
+              : false;
+
+            if (isRecipientBlocked) {
+              return (
+                <div
+                  style={{
+                    background: "var(--bg-secondary)",
+                    borderRadius: "var(--radius-md)",
+                    margin: "0 16px 24px",
+                    padding: "16px 20px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 14, color: "var(--text-muted)" }}>
+                    <Ban size={20} color="var(--status-dnd)" />
+                    <span>Você não pode enviar mensagens para um usuário que bloqueou.</span>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (window.confirm(`Tem certeza que deseja desbloquear ${dmRecipient?.global_name || dmRecipient?.username}?`)) {
+                        await useDiscordStore.getState().unblockUser(accountId, dmRecipient!.id);
+                        import("@/components/ui/Toast").then(m => m.toast.success("Usuário desbloqueado!"));
+                      }
+                    }}
+                    style={{
+                      background: "var(--brand-500)",
+                      color: "#ffffff",
+                      border: "none",
+                      borderRadius: "var(--radius-sm)",
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Desbloquear
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <MessageInput
+                channelId={channelId}
+                replyingTo={replyingTo}
+                onCancelReply={() => setReplyingTo(null)}
+                onSend={handleSend}
+                accountColor={account?.color}
+              />
+            );
+          })()}
         </div>
 
         {searchQuery !== null && (

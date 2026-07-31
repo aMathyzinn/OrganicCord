@@ -1,6 +1,7 @@
 import type { Embed } from "@/types";
 import { MessageContent } from "./MessageContent";
 import { Play } from "lucide-react";
+import { useExternalLinkStore } from "@/stores/externalLinkStore";
 
 interface Props {
   embeds: Embed[];
@@ -61,7 +62,15 @@ function EmbedCard({ embed }: { embed: Embed }) {
         {embed.author && (
           <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-normal)" }}>
             {embed.author.url ? (
-              <a href={embed.author.url} target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "none" }} className="hover-underline">
+              <a
+                href={embed.author.url}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (embed.author?.url) useExternalLinkStore.getState().openExternalLink(embed.author.url);
+                }}
+                style={{ color: "inherit", textDecoration: "none", cursor: "pointer" }}
+                className="hover-underline"
+              >
                 {embed.author.name}
               </a>
             ) : embed.author.name}
@@ -69,13 +78,32 @@ function EmbedCard({ embed }: { embed: Embed }) {
         )}
         {embed.title && (
           <div style={{ fontWeight: 600, fontSize: 16, color: "var(--text-link)", marginBottom: 8, lineHeight: 1.3 }}>
-            <a href={embed.url} target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "none" }} className="hover-underline">
+            {embed.url ? (
+              <a
+                href={embed.url}
+                onClick={(e) => {
+                  e.preventDefault();
+                  useExternalLinkStore.getState().openExternalLink(embed.url!);
+                }}
+                style={{ color: "inherit", textDecoration: "none", cursor: "pointer" }}
+                className="hover-underline"
+              >
+                <MessageContent content={embed.title} embed />
+              </a>
+            ) : (
               <MessageContent content={embed.title} embed />
-            </a>
+            )}
           </div>
         )}
         {mediaUrl && (
-          <a href={embed.url} target="_blank" rel="noreferrer" style={{ position: "relative", display: "block", borderRadius: 8, overflow: "hidden", aspectRatio: "16/9", width: "100%", background: "#000" }}>
+          <a
+            href={embed.url || "#"}
+            onClick={(e) => {
+              e.preventDefault();
+              if (embed.url) useExternalLinkStore.getState().openExternalLink(embed.url);
+            }}
+            style={{ position: "relative", display: "block", borderRadius: 8, overflow: "hidden", aspectRatio: "16/9", width: "100%", background: "#000", cursor: "pointer" }}
+          >
             <img src={mediaUrl} alt={embed.title} style={{ width: "100%", height: "100%", objectFit: "cover", opacity: 0.9 }} />
             <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", width: 48, height: 48, background: "rgba(0,0,0,0.6)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Play size={24} color="white" fill="white" style={{ marginLeft: 4 }} />
@@ -113,9 +141,12 @@ function EmbedCard({ embed }: { embed: Embed }) {
             {embed.author.url ? (
               <a
                 href={embed.author.url}
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: "inherit" }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (embed.author?.url) useExternalLinkStore.getState().openExternalLink(embed.author.url);
+                }}
+                style={{ color: "inherit", cursor: "pointer" }}
+                className="hover-underline"
               >
                 {embed.author.name}
               </a>
@@ -142,10 +173,12 @@ function EmbedCard({ embed }: { embed: Embed }) {
               {embed.url ? (
                 <a
                   href={embed.url}
-                  target="_blank"
-                  rel="noreferrer"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    useExternalLinkStore.getState().openExternalLink(embed.url!);
+                  }}
                   className="hover-underline"
-                  style={{ color: "var(--text-link)", textDecoration: "none" }}
+                  style={{ color: "var(--text-link)", textDecoration: "none", cursor: "pointer" }}
                 >
                   <MessageContent content={embed.title} embed />
                 </a>

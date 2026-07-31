@@ -1,16 +1,21 @@
-# OrganicCord
+# OrganicCord v0.1.5
 
 Alternative, complete, and multi-account Discord client, built with a focus on lightness, compactness, and privacy. Runs as a native desktop app via Tauri 2.0 — no Electron, no bloat.
 
-## Features
+## 🚀 Features & What's New in v0.1.5
 
-- **Simultaneous multi-account** — Fast switching between accounts in the sidebar
+- **Simultaneous multi-account** — Fast switching between accounts in the sidebar and bottom bar accordion
+- **2-Way Voice Calls (RTC)** — Microphone input capture (Opus encode), speaker output playback (Opus decode via CPAL), AES-256-GCM transport encryption, and Opcode 5 `Speaking` signaling
+- **DAVE Protocol Integration** — End-to-End Media Encryption support via `davey` MLS
+- **Resilient Gateway v10 Protocol** — Instant session resume (`OP_RESUME` - Opcode 6), Missed Heartbeat ACK tracking (`MAX_MISSED_ACKS`), and graceful handling of `OP_RECONNECT` (7) and `OP_INVALID_SESSION` (9)
 - **Login via Token or QR Code** — Token encrypted with AES-256-GCM + Windows Credential Manager
-- **Complete chat** — Messages, replies, embeds, DMs, reactions, markdown
-- **Presence and status** — Online/Idle/DND/Invisible, custom status with emoji
-- **Integrated AI** — Auto-reply in channels and DMs, automated conversations between accounts with orchestrator
+- **Themes & Visual Customization** — Default AMOLED Midnight theme (`#000000`), Dark Mono default icon, Nitro color gradients, and Custom Theme Creator (Background, Primary, Secondary, Brand Accent)
+- **Dual-Layer Rate Limiting** — Proactive Rust + React rate-limiter with `Retry-After` header parsing and Clyde Anti-Spam alerts
+- **User Bottom Bar & Micro-animations** — Mute Mic, Deafen, Settings, inline accordions for Account Switcher & Status, and Tooltips
+- **Profile & Nitro Editor** — In-app avatar, banner, bio, and display name customization with live preview and `⚡ Nitro` badge
+- **Forums & Threads** — Forum channels with post cards, image thumbnails, server reactions, and thread trees
+- **Privacy & Muting** — Channel, chat, and server muting with server hover cards and blocked user content hiding
 - **Stealth Mode** — Ctrl+Shift+. hides selected accounts and AI features
-- **WebSocket Gateway** — Per-account connection with heartbeat, auto-reconnect, and real-time presence
 
 ## Stack
 

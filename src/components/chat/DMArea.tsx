@@ -38,7 +38,7 @@ export function DMArea({ channelId, accountId }: Props) {
 
   const dms = cache.dms[accountId] ?? [];
   const dm = dms.find((d) => d.id === channelId);
-  const recipient = dm?.recipients[0];
+  const recipient = dm?.recipients?.[0];
 
   const dmRule = dmRules.find((r: any) => r.account_id === accountId);
 

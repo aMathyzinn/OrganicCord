@@ -1,9 +1,11 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useState } from "react";
 import type { DiscordMessage, DiscordChannel } from "@/types";
 import { MessageItem } from "./MessageItem";
 import { formatMessageDate } from "@/lib/utils";
 import { LoadingScreen } from "@/components/ui/LoadingScreen";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Ban } from "lucide-react";
+import { useNavigationStore } from "@/stores/navigationStore";
+import { useDiscordStore } from "@/stores/discordStore";
 
 interface Props {
   messages: DiscordMessage[];
@@ -25,6 +27,16 @@ export function MessageList({
   channels = [],
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [revealedBlockedIds, setRevealedBlockedIds] = useState<Set<string>>(new Set());
+
+  const activeAccountId = useNavigationStore((s) => s.activeAccountId);
+  const relationships = useDiscordStore((s) => activeAccountId ? s.cache.relationships[activeAccountId] : null);
+
+  const blockedUserIds = new Set(
+    (relationships || [])
+      .filter((r) => r.relationship_type === 2)
+      .map((r) => r.user.id)
+  );
 
   // Detecta scroll no topo para carregar mais mensagens (mensagens chegam invertidas)
   const handleScroll = useCallback(
@@ -68,22 +80,27 @@ export function MessageList({
   }
 
   // Ordena estritamente por ID (mais novos primeiro) para evitar qualquer embaralhamento
+  const isNumericId = (id: string) => /^\d+$/.test(id);
   const sortedMessages = [...messages].sort((a, b) => {
-    // Ids locais (ex: local-12345) devem sempre ficar no topo ou serem comparados via timestamp
-    const isLocalA = a.id.startsWith("local-");
-    const isLocalB = b.id.startsWith("local-");
-    
-    if (isLocalA && !isLocalB) return -1;
-    if (!isLocalA && isLocalB) return 1;
-    if (isLocalA && isLocalB) {
+    // IDs não-numéricos (local-, clyde-, etc.) ficam no topo comparados via timestamp
+    const isNonNumericA = !isNumericId(a.id);
+    const isNonNumericB = !isNumericId(b.id);
+
+    if (isNonNumericA && !isNonNumericB) return -1;
+    if (!isNonNumericA && isNonNumericB) return 1;
+    if (isNonNumericA && isNonNumericB) {
       return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
     }
-    
-    const idA = BigInt(a.id);
-    const idB = BigInt(b.id);
-    if (idB > idA) return 1;
-    if (idB < idA) return -1;
-    return 0;
+
+    try {
+      const idA = BigInt(a.id);
+      const idB = BigInt(b.id);
+      if (idB > idA) return 1;
+      if (idB < idA) return -1;
+      return 0;
+    } catch {
+      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+    }
   });
 
   // Agrupa mensagens por data para separadores
@@ -119,6 +136,54 @@ export function MessageList({
                 new Date(prevMsg.timestamp).getTime() <
                 5 * 60 * 1000 &&
               new Date(msg.timestamp).getTime() - new Date(prevMsg.timestamp).getTime() >= 0;
+
+            const isBlockedAuthor = blockedUserIds.has(msg.author.id);
+            const isRevealed = revealedBlockedIds.has(msg.id);
+
+            if (isBlockedAuthor && !isRevealed) {
+              return (
+                <div
+                  key={msg.id}
+                  style={{
+                    background: "rgba(242, 63, 67, 0.05)",
+                    border: "1px solid rgba(242, 63, 67, 0.15)",
+                    borderRadius: "var(--radius-sm)",
+                    padding: "8px 12px",
+                    margin: "4px 16px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    fontSize: 13,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Ban size={14} color="var(--status-dnd)" />
+                    <span>Mensagem de usuário bloqueado</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setRevealedBlockedIds((prev) => {
+                        const next = new Set(prev);
+                        next.add(msg.id);
+                        return next;
+                      });
+                    }}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "var(--text-link)",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      fontSize: 13,
+                    }}
+                    className="hover-underline"
+                  >
+                    Mostrar mensagem
+                  </button>
+                </div>
+              );
+            }
 
             return (
               <MessageItem

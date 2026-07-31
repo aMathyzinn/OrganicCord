@@ -190,7 +190,7 @@ export function SearchResultsSidebar({ accountId, guildId, channelId, query, onC
                       </span>
                     </div>
                     <div style={{ fontSize: 14, color: "var(--text-normal)", wordBreak: "break-word" }}>
-                      <MessageContent content={msg.content} />
+                      <MessageContent content={msg.content} highlightQuery={query} />
                       {msg.embeds && msg.embeds.length > 0 && (
                         <EmbedRenderer embeds={msg.embeds} />
                       )}

@@ -19,6 +19,7 @@ interface ProfileData {
     banner: string | null;
     accent_color: number | null;
     avatar_decoration_data?: { asset: string; sku_id: string } | null;
+    premium_type?: number | null;
   };
   user_profile?: {
     bio?: string;
@@ -96,8 +97,11 @@ export function UserProfileModal() {
   const renderBanner = () => {
     const bannerHash = profile?.user_profile?.banner || profile?.user?.banner;
     const accentColor = profile?.user_profile?.accent_color || profile?.user?.accent_color;
+    const premiumType = profile?.user?.premium_type ?? (profile as any)?.premium_type;
+    const hasNitro = premiumType === 2 || premiumType === 1 || !!profile?.premium_since;
     
-    if (bannerHash && profile?.user?.id) {
+    // Imagem de banner é exclusiva para assinantes do Nitro
+    if (hasNitro && bannerHash && profile?.user?.id) {
       const isAnimated = bannerHash.startsWith("a_");
       const ext = isAnimated ? "gif" : "png";
       const url = `https://cdn.discordapp.com/banners/${profile.user.id}/${bannerHash}.${ext}?size=600`;
