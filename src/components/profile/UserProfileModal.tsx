@@ -4,46 +4,16 @@ import { useProfileStore } from "@/stores/profileStore";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
 import { fetchUserProfile } from "@/lib/tauri";
-import { Loader2, MessageSquare, X, Image as ImageIcon, MoreHorizontal, Gamepad2, Flame, Zap, RotateCcw } from "lucide-react";
+import { Loader2, MessageSquare, X, Image as ImageIcon, MoreHorizontal, Gamepad2 } from "lucide-react";
 import { Avatar } from "@/components/ui/Avatar";
-import { getAvatarUrl } from "@/lib/utils";
 import { DiscordText } from "@/components/ui/DiscordText";
-
-// Exemplo da estrutura retornada por fetch_user_profile
-interface ProfileData {
-  user: {
-    id: string;
-    username: string;
-    global_name: string | null;
-    avatar: string | null;
-    banner: string | null;
-    accent_color: number | null;
-    avatar_decoration_data?: { asset: string; sku_id: string } | null;
-    premium_type?: number | null;
-  };
-  user_profile?: {
-    bio?: string;
-    accent_color?: number;
-    banner?: string;
-    pronouns?: string;
-    theme_colors?: number[];
-  };
-  badges?: {
-    id: string;
-    icon: string;
-    description: string;
-  }[];
-  mutual_guilds?: any[];
-  mutual_friends?: any[];
-  mutual_friends_count?: number;
-  premium_since?: string;
-}
+import type { DiscordUserProfile } from "@/types";
 
 export function UserProfileModal() {
   const { isOpen, userId, closeProfile } = useProfileStore();
   
   const [loading, setLoading] = useState(false);
-  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const [profile, setProfile] = useState<DiscordUserProfile | null>(null);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"activity" | "mutual_guilds" | "mutual_friends">("activity");
   const activeAccountId = useNavigationStore((state) => state.activeAccountId);
@@ -76,7 +46,6 @@ export function UserProfileModal() {
       setProfile(null);
       fetchUserProfile(activeAccountId, userId)
         .then((data) => {
-          console.log("PROFILE DATA REBIDO DO RUST:", data);
           setProfile(data);
         })
         .catch((e) => {
@@ -90,30 +59,6 @@ export function UserProfileModal() {
   }, [isOpen, userId, activeAccountId]);
 
   if (!isOpen) return null;
-
-  const hexColor = (color: number | undefined | null) => 
-    color ? `#${color.toString(16).padStart(6, '0')}` : "var(--bg-modifier-hover)";
-
-  const renderBanner = () => {
-    const bannerHash = profile?.user_profile?.banner || profile?.user?.banner;
-    const accentColor = profile?.user_profile?.accent_color || profile?.user?.accent_color;
-    const premiumType = profile?.user?.premium_type ?? (profile as any)?.premium_type;
-    const hasNitro = premiumType === 2 || premiumType === 1 || !!profile?.premium_since;
-    
-    // Imagem de banner é exclusiva para assinantes do Nitro
-    if (hasNitro && bannerHash && profile?.user?.id) {
-      const isAnimated = bannerHash.startsWith("a_");
-      const ext = isAnimated ? "gif" : "png";
-      const url = `https://cdn.discordapp.com/banners/${profile.user.id}/${bannerHash}.${ext}?size=600`;
-      return (
-        <div style={{ height: 120, width: "100%", backgroundImage: `url(${url})`, backgroundSize: "cover", backgroundPosition: "center" }} />
-      );
-    } else if (accentColor) {
-      return <div style={{ height: 120, width: "100%", background: hexColor(accentColor) }} />;
-    } else {
-      return <div style={{ height: 120, width: "100%", background: "var(--bg-tertiary)" }} />;
-    }
-  };
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => !open && closeProfile()}>
@@ -423,7 +368,7 @@ export function UserProfileModal() {
                                 avatarHash={f.avatar} 
                                 size={40} 
                                 showStatus={true} 
-                                status={(cache.presences[activeAccountId!]?.[f.id]?.status as any) || "offline"} 
+                                status={cache.presences[activeAccountId!]?.[f.id]?.status || "offline"}
                               />
                             </div>
                             <div style={{ display: "flex", flexDirection: "column" }}>
@@ -444,7 +389,7 @@ export function UserProfileModal() {
                   {activeTab === "mutual_guilds" && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       {profile.mutual_guilds?.length ? profile.mutual_guilds.map((g) => {
-                        const realGuild = myGuilds.find((mg: any) => mg.id === g.id);
+                        const realGuild = myGuilds.find((guild) => guild.id === g.id);
                         const guildName = realGuild ? realGuild.name : (g.nick || "Servidor Privado");
                         const guildIcon = realGuild ? realGuild.icon : g.icon;
 

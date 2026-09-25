@@ -2,8 +2,8 @@ import { useMemo } from "react";
 import { Users } from "lucide-react";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useNavigationStore } from "@/stores/navigationStore";
-import { getAvatarUrl } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
+import type { DiscordActivity, DiscordPresence } from "@/types";
 export function ActiveNowSidebar() {
   const { activeAccountId } = useNavigationStore();
   const presences = useDiscordStore((s) => activeAccountId ? s.cache.presences[activeAccountId] : {});
@@ -103,7 +103,7 @@ export function ActiveNowSidebar() {
   );
 }
 
-function ActiveCard({ username, description, userId, avatarHash, status, activity }: { username: string; description: string; userId: string; avatarHash: string | null; status: string; activity?: any }) {
+function ActiveCard({ username, description, userId, avatarHash, status, activity }: { username: string; description: string; userId: string; avatarHash: string | null; status: DiscordPresence["status"]; activity?: DiscordActivity }) {
   return (
     <div
       style={{
@@ -135,7 +135,7 @@ function ActiveCard({ username, description, userId, avatarHash, status, activit
             username={username}
             size={32}
             showStatus={true}
-            status={status as any}
+            status={status}
             style={{ background: "var(--bg-tertiary)" }}
           />
         </div>

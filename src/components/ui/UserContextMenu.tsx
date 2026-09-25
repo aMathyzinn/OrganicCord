@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useProfileStore } from "@/stores/profileStore";
 import { useNotificationStore, MUTE_DURATIONS } from "@/stores/notificationStore";
@@ -6,6 +6,7 @@ import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
 import * as api from "@/lib/tauri";
 import { toast } from "@/components/ui/Toast";
+import { AppConfirmDialog, AppTextDialog } from "@/components/ui/AppDialog";
 import { ChannelType } from "@/types";
 import {
   User,
@@ -35,8 +36,11 @@ interface Props {
 export function UserContextMenu({ children, userId, guildId, channelId }: Props) {
   const { openProfile } = useProfileStore();
   const { activeAccountId, setActiveChannel } = useNavigationStore();
-  const { cache, closeDM, fetchRelationships, sendMessage, blockUser, unblockUser } = useDiscordStore();
+  const { cache, closeDM, sendMessage, blockUser, unblockUser } = useDiscordStore();
   const { isUserMuted, muteUser, unmuteUser, isUserMutedInGuild, muteUserInGuild, unmuteUserInGuild } = useNotificationStore();
+  const [noteDialogOpen, setNoteDialogOpen] = useState(false);
+  const [noteValue, setNoteValue] = useState("");
+  const [pendingConfirmation, setPendingConfirmation] = useState<"remove" | "block" | null>(null);
 
   const userMuted = isUserMuted(userId);
   const userMutedInGuild = guildId ? isUserMutedInGuild(guildId, userId) : false;
@@ -70,12 +74,12 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
     }
   };
 
-  const handleAddNote = async () => {
-    const note = window.prompt("Adicionar nota de usuário (visível apenas para você):");
-    if (note !== null && activeAccountId) {
+  const saveNote = async () => {
+    if (activeAccountId) {
       try {
-        await api.setUserNote(activeAccountId, userId, note);
+        await api.setUserNote(activeAccountId, userId, noteValue);
         toast.success("Nota atualizada!");
+        setNoteValue("");
       } catch (err) {
         toast.error("Erro ao salvar nota.");
       }
@@ -102,7 +106,7 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
         dmId = dm.id;
       }
       const channels = await api.getChannels(activeAccountId, targetGuildId);
-      const textChan = channels.find((c) => (c.channel_type as any) === ChannelType.GUILD_TEXT || (c.channel_type as any) === 0) || channels[0];
+      const textChan = channels.find((channel) => channel.channel_type === ChannelType.GUILD_TEXT) || channels[0];
       if (textChan) {
         const invite = await api.createChannelInvite(activeAccountId, textChan.id);
         if (invite?.code) {
@@ -119,25 +123,21 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
 
   const handleRemoveFriend = async () => {
     if (!activeAccountId) return;
-    if (window.confirm("Tem certeza que deseja remover este amigo?")) {
-      try {
-        await unblockUser(activeAccountId, userId);
-        toast.success("Amigo removido.");
-      } catch (err) {
-        toast.error("Erro ao remover amigo.");
-      }
+    try {
+      await unblockUser(activeAccountId, userId);
+      toast.success("Amigo removido.");
+    } catch (err) {
+      toast.error("Erro ao remover amigo.");
     }
   };
 
   const handleBlockUser = async () => {
     if (!activeAccountId) return;
-    if (window.confirm("Tem certeza que deseja bloquear este usuário?")) {
-      try {
-        await blockUser(activeAccountId, userId);
-        toast.success("Usuário bloqueado.");
-      } catch (err) {
-        toast.error("Erro ao bloquear usuário.");
-      }
+    try {
+      await blockUser(activeAccountId, userId);
+      toast.success("Usuário bloqueado.");
+    } catch (err) {
+      toast.error("Erro ao bloquear usuário.");
     }
   };
 
@@ -154,6 +154,7 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
   };
 
   return (
+    <>
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
@@ -212,7 +213,7 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
 
           {/* 3. Adicionar nota */}
           <ContextMenu.Item
-            onSelect={handleAddNote}
+            onSelect={() => setNoteDialogOpen(true)}
             style={{
               padding: "8px 12px",
               borderRadius: "var(--radius-sm)",
@@ -364,7 +365,7 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
 
           {/* 7. Desfazer amizade */}
           <ContextMenu.Item
-            onSelect={handleRemoveFriend}
+            onSelect={() => setPendingConfirmation("remove")}
             style={{
               padding: "8px 12px",
               borderRadius: "var(--radius-sm)",
@@ -384,7 +385,7 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
 
           {/* 8. Bloquear */}
           <ContextMenu.Item
-            onSelect={handleBlockUser}
+            onSelect={() => setPendingConfirmation("block")}
             style={{
               padding: "8px 12px",
               borderRadius: "var(--radius-sm)",
@@ -670,5 +671,35 @@ export function UserContextMenu({ children, userId, guildId, channelId }: Props)
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+    <AppTextDialog
+      open={noteDialogOpen}
+      onOpenChange={setNoteDialogOpen}
+      title="Adicionar nota"
+      description="Esta nota é visível apenas para você."
+      label="Nota"
+      value={noteValue}
+      onValueChange={setNoteValue}
+      submitLabel="Salvar nota"
+      onSubmit={saveNote}
+    />
+    <AppConfirmDialog
+      open={pendingConfirmation === "remove"}
+      onOpenChange={(open) => !open && setPendingConfirmation(null)}
+      title="Remover amigo?"
+      description="Você deixará de ser amigo desta pessoa."
+      confirmLabel="Remover amigo"
+      destructive
+      onConfirm={handleRemoveFriend}
+    />
+    <AppConfirmDialog
+      open={pendingConfirmation === "block"}
+      onOpenChange={(open) => !open && setPendingConfirmation(null)}
+      title="Bloquear usuário?"
+      description="Você não receberá novas mensagens desta pessoa."
+      confirmLabel="Bloquear usuário"
+      destructive
+      onConfirm={handleBlockUser}
+    />
+    </>
   );
 }

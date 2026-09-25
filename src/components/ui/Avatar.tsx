@@ -55,7 +55,7 @@ export function Avatar({
           alt={username}
           width={size}
           height={size}
-          onError={(e) => {
+          onError={() => {
             console.error("Erro ao carregar imagem do Avatar:", url);
             setImgError(true);
           }}

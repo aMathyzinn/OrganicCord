@@ -383,12 +383,26 @@ function GuildIcon({
 
   return (
     <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center", alignItems: "center", opacity: isMuted && !active ? 0.75 : 1 }}>
+      {active && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            width: 4,
+            height: 36,
+            borderRadius: "0 4px 4px 0",
+            background: "var(--text-normal)",
+          }}
+        />
+      )}
       {/* Unread dot (White) */}
       {hasUnread && !active && !isMuted && (
         <div
+          aria-hidden="true"
           style={{
             position: "absolute",
-            left: -4,
+            left: 0,
             width: 8,
             height: 8,
             borderRadius: "50%",
@@ -401,6 +415,8 @@ function GuildIcon({
 
       <button
         onClick={onClick}
+        aria-label={label}
+        aria-current={active ? "page" : undefined}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{

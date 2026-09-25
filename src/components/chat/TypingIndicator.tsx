@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useAccountStore } from "@/stores/accountStore";
-import { useNavigationStore } from "@/stores/navigationStore";
 
 interface Props {
   channelId: string;
@@ -9,9 +8,8 @@ interface Props {
 
 export function TypingIndicator({ channelId }: Props) {
   const typingUsersRaw = useDiscordStore((s) => s.cache.typingUsers[channelId] || []);
-  const accountId = useNavigationStore((s) => s.activeAccountId);
   const accounts = useAccountStore((s) => s.accounts);
-  const [triggerReRender, setTrigger] = useState(0);
+  const [, setTrigger] = useState(0);
 
   useEffect(() => {
     // Re-render periodically to drop expired users locally

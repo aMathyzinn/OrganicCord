@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { COLOR_THEMES, STANDARD_THEMES, APP_ICONS, applyTheme } from "@/lib/themeManager";
+import { COLOR_THEMES, APP_ICONS, applyTheme } from "@/lib/themeManager";
 import { OrganicMark } from "@/components/ui/OrganicMark";
 import { Sparkles, RefreshCw, Check, Palette, Sliders, Eye } from "lucide-react";
 
@@ -407,7 +407,17 @@ export function AppearanceSettings() {
 
 // ─── Componentes Auxiliares ──────────────────────────────────────────────────
 
-function ThemeCard({ label, active, bg, borderColor, onClick, onMouseEnter, onMouseLeave }: any) {
+interface ThemeCardProps {
+  label: string;
+  active: boolean;
+  bg: string;
+  borderColor: string;
+  onClick: () => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}
+
+function ThemeCard({ label, active, bg, borderColor, onClick, onMouseEnter, onMouseLeave }: ThemeCardProps) {
   return (
     <div
       onClick={onClick}
@@ -475,12 +485,7 @@ function ColorPickerItem({ label, value, onChange }: { label: string; value: str
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 500 }}>{label}</span>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <input
-          type="color"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          style={{ width: 36, height: 36, borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", background: "none" }}
-        />
+        <span aria-hidden="true" style={{ width: 36, height: 36, borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)", background: value, flexShrink: 0 }} />
         <input
           type="text"
           value={value}

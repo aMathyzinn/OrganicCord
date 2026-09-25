@@ -1,15 +1,15 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { load } from "@tauri-apps/plugin-store";
 import type { NavigationState } from "@/types";
+import { getAppStore, persistStoreEntries } from "@/lib/appStore";
+import { toast } from "@/components/ui/Toast";
 
-let storeCache: any = null;
-const getStore = async () => {
-  if (!storeCache) {
-    storeCache = await load("organiccord_settings.json", { autoSave: false } as any);
-  }
-  return storeCache;
-};
+function persistNavigation(entries: ReadonlyArray<readonly [string, unknown]>): void {
+  void persistStoreEntries(entries).catch((error: unknown) => {
+    console.error("Não foi possível salvar a navegação local.", error);
+    toast.error("Não foi possível salvar a organização dos servidores.");
+  });
+}
 
 interface GuildFolder {
   id: string;
@@ -17,6 +17,10 @@ interface GuildFolder {
   color?: string;
   guildIds: string[];
   isExpanded: boolean;
+}
+
+function snapshotFolders(folders: readonly GuildFolder[]): GuildFolder[] {
+  return folders.map((folder) => ({ ...folder, guildIds: [...folder.guildIds] }));
 }
 
 interface NavigationStore extends NavigationState {
@@ -58,22 +62,16 @@ export const useNavigationStore = create<NavigationStore>()(
 
     setGuildOrder: (accountId, order) => set((s) => {
       s.guildOrder[accountId] = order;
-      getStore().then(store => {
-        store.set(`guildOrder_${accountId}`, order);
-        store.save();
-      });
+      persistNavigation([[`guildOrder_${accountId}`, order]]);
     }),
 
     reorderGuilds: (accountId, startIndex, endIndex) => set((s) => {
       const result = Array.from(s.guildOrder[accountId] || []);
       const [removed] = result.splice(startIndex, 1);
+      if (!removed) return;
       result.splice(endIndex, 0, removed);
       s.guildOrder[accountId] = result;
-      
-      getStore().then(store => {
-        store.set(`guildOrder_${accountId}`, result);
-        store.save();
-      });
+      persistNavigation([[`guildOrder_${accountId}`, result]]);
     }),
 
     combineGuildsIntoFolder: (accountId, sourceId, targetId) => set((s) => {
@@ -106,11 +104,10 @@ export const useNavigationStore = create<NavigationStore>()(
          s.guildOrder[accountId] = newOrder;
       }
       
-      getStore().then(store => {
-        store.set(`folders_${accountId}`, s.guildFolders[accountId]);
-        store.set(`guildOrder_${accountId}`, s.guildOrder[accountId]);
-        store.save();
-      });
+      persistNavigation([
+        [`folders_${accountId}`, snapshotFolders(s.guildFolders[accountId])],
+        [`guildOrder_${accountId}`, [...s.guildOrder[accountId]]],
+      ]);
     }),
 
     createFolder: (accountId, guildIds, name, color) => set((s) => {
@@ -124,11 +121,7 @@ export const useNavigationStore = create<NavigationStore>()(
       };
       s.guildFolders[accountId].push(newFolder);
       
-      // Persist async
-      getStore().then(store => {
-        store.set(`folders_${accountId}`, s.guildFolders[accountId]);
-        store.save();
-      });
+      persistNavigation([[`folders_${accountId}`, snapshotFolders(s.guildFolders[accountId])]]);
     }),
 
     toggleFolder: (accountId, folderId) => set((s) => {
@@ -136,11 +129,7 @@ export const useNavigationStore = create<NavigationStore>()(
       if (folders) {
         const folder = folders.find(f => f.id === folderId);
         if (folder) folder.isExpanded = !folder.isExpanded;
-        // Persist async
-        getStore().then(store => {
-          store.set(`folders_${accountId}`, s.guildFolders[accountId]);
-          store.save();
-        });
+        persistNavigation([[`folders_${accountId}`, snapshotFolders(s.guildFolders[accountId])]]);
       }
     }),
 
@@ -160,28 +149,20 @@ export const useNavigationStore = create<NavigationStore>()(
       // Clean up empty folders
       s.guildFolders[accountId] = s.guildFolders[accountId].filter(f => f.guildIds.length > 0);
       
-      // Persist async
-      getStore().then(store => {
-        store.set(`folders_${accountId}`, s.guildFolders[accountId]);
-        store.save();
-      });
+      persistNavigation([[`folders_${accountId}`, snapshotFolders(s.guildFolders[accountId])]]);
     }),
 
     removeFolder: (accountId, folderId) => set((s) => {
       if (s.guildFolders[accountId]) {
         s.guildFolders[accountId] = s.guildFolders[accountId].filter(f => f.id !== folderId);
-        // Persist async
-        getStore().then(store => {
-          store.set(`folders_${accountId}`, s.guildFolders[accountId]);
-          store.save();
-        });
+        persistNavigation([[`folders_${accountId}`, snapshotFolders(s.guildFolders[accountId])]]);
       }
     }),
 
     loadFolders: async (accountId) => {
-      const store = await getStore();
-      const savedFolders = await (store as any).get(`folders_${accountId}`) as GuildFolder[];
-      const savedOrder = await (store as any).get(`guildOrder_${accountId}`) as string[];
+      const store = await getAppStore();
+      const savedFolders = await store.get<GuildFolder[]>(`folders_${accountId}`);
+      const savedOrder = await store.get<string[]>(`guildOrder_${accountId}`);
       set((s) => {
         if (savedFolders) s.guildFolders[accountId] = savedFolders;
         if (savedOrder) s.guildOrder[accountId] = savedOrder;
@@ -211,6 +192,7 @@ export const useNavigationStore = create<NavigationStore>()(
     setActiveGuild: (guildId) =>
       set((s) => {
         const acct = s.activeAccountId;
+        console.info("[guild-content] guild_selected", { accountId: acct, guildId });
         // Save current channel for the previous guild before switching (scoped per account)
         if (acct && s.activeGuildId && s.activeChannelId) {
           if (!s.lastChannelByGuild[acct]) s.lastChannelByGuild[acct] = {};

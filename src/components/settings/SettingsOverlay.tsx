@@ -7,8 +7,10 @@ import { AppearanceSettings } from "./tabs/AppearanceSettings";
 import { PrivacySettings } from "./tabs/PrivacySettings";
 import { NotificationsSettings } from "./tabs/NotificationsSettings";
 import { KeybindsSettings } from "./tabs/KeybindsSettings";
+import { RegisteredGamesSettings } from "./tabs/RegisteredGamesSettings";
+import { AboutCreditsSettings } from "./tabs/AboutCreditsSettings";
 
-type SettingsTab = "account" | "voice" | "appearance" | "privacy" | "notifications" | "keybinds";
+type SettingsTab = "account" | "voice" | "appearance" | "privacy" | "notifications" | "keybinds" | "registered-games" | "about";
 
 export function SettingsOverlay() {
   const { isSettingsOpen, closeSettings } = useNavigationStore();
@@ -85,7 +87,13 @@ export function SettingsOverlay() {
           >
             Voz e Vídeo
           </TabButton>
-          <TabButton 
+          <TabButton
+            active={activeTab === "registered-games"}
+            onClick={() => setActiveTab("registered-games")}
+          >
+            Jogos Registrados
+          </TabButton>
+          <TabButton
             active={activeTab === "notifications"} 
             onClick={() => setActiveTab("notifications")}
           >
@@ -96,6 +104,12 @@ export function SettingsOverlay() {
             onClick={() => setActiveTab("keybinds")}
           >
             Atalhos de Teclado
+          </TabButton>
+          <TabButton
+            active={activeTab === "about"}
+            onClick={() => setActiveTab("about")}
+          >
+            Sobre e Créditos
           </TabButton>
         </div>
       </div>
@@ -116,9 +130,11 @@ export function SettingsOverlay() {
           {activeTab === "account" && <MyAccountSettings />}
           {activeTab === "privacy" && <PrivacySettings />}
           {activeTab === "voice" && <VoiceVideoSettings />}
+          {activeTab === "registered-games" && <RegisteredGamesSettings />}
           {activeTab === "appearance" && <AppearanceSettings />}
           {activeTab === "notifications" && <NotificationsSettings />}
           {activeTab === "keybinds" && <KeybindsSettings />}
+          {activeTab === "about" && <AboutCreditsSettings />}
         </div>
 
         {/* Close Button Area */}

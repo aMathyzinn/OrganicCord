@@ -1,23 +1,26 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex;
+use zeroize::Zeroize;
 
-use rsa::{RsaPrivateKey, Oaep};
+use rsa::sha2::Sha256 as RsaSha256;
+use rsa::{Oaep, RsaPrivateKey};
+use sha2::{Digest, Sha256};
 use spki::EncodePublicKey;
-use sha2::{Sha256, Digest};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{
-    connect_async_tls_with_config,
-    tungstenite::Message,
-    tungstenite::client::IntoClientRequest,
+    connect_async_tls_with_config, tungstenite::client::IntoClientRequest, tungstenite::Message,
 };
 
-use qrcode::QrCode;
 use image::Luma;
+use qrcode::QrCode;
+
+use crate::commands::account::add_account_from_token;
+use crate::session::PublicAccount;
 
 pub type QrLoginHandle = Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>;
 
@@ -28,10 +31,19 @@ pub fn new_qr_handle() -> QrLoginHandle {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QrEvent {
-    QrReady { png_b64: String, fingerprint: String },
-    Scanned { username: String },
-    Confirmed { token: String },
-    Error { message: String },
+    QrReady {
+        png_b64: String,
+        fingerprint: String,
+    },
+    Scanned {
+        username: String,
+    },
+    Confirmed {
+        account: PublicAccount,
+    },
+    Error {
+        message: String,
+    },
     Cancelled,
 }
 
@@ -73,7 +85,12 @@ pub async fn start_qr_login(
     let app2 = app.clone();
     let task = tokio::spawn(async move {
         if let Err(e) = run_flow(app2.clone()).await {
-            let _ = app2.emit("qr_login_event", QrEvent::Error { message: e.to_string() });
+            let _ = app2.emit(
+                "qr_login_event",
+                QrEvent::Error {
+                    message: e.to_string(),
+                },
+            );
         }
     });
 
@@ -82,9 +99,7 @@ pub async fn start_qr_login(
 }
 
 #[tauri::command]
-pub async fn cancel_qr_login(
-    handle_state: tauri::State<'_, QrLoginHandle>,
-) -> Result<(), String> {
+pub async fn cancel_qr_login(handle_state: tauri::State<'_, QrLoginHandle>) -> Result<(), String> {
     cancel_inner(&handle_state).await;
     Ok(())
 }
@@ -98,14 +113,16 @@ async fn cancel_inner(h: &QrLoginHandle) {
 async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
     // --- 1. Generate RSA-2048 ephemeral keypair ---
     let private_key = {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand_10::rng();
         RsaPrivateKey::new(&mut rng, 2048)
             .map_err(|e| anyhow::anyhow!("RSA Keygen error: {}", e))?
     };
-    
-    let spki_der = private_key.to_public_key().to_public_key_der()
+
+    let spki_der = private_key
+        .to_public_key()
+        .to_public_key_der()
         .map_err(|e| anyhow::anyhow!("SPKI error: {}", e))?;
-    
+
     // Discord expects standard base64 of the SPKI DER key
     let pub_b64 = B64.encode(spki_der.as_bytes());
 
@@ -164,12 +181,14 @@ async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
 
             // Server challenges us with encrypted nonce (Encrypted with our RSA public key)
             "nonce_proof" => {
-                let enc_b64 = msg.encrypted_nonce
+                let enc_b64 = msg
+                    .encrypted_nonce
                     .ok_or_else(|| anyhow::anyhow!("nonce_proof missing encrypted_nonce"))?;
 
                 let enc = B64.decode(&enc_b64)?;
-                let padding = Oaep::new::<Sha256>();
-                let nonce_bytes = private_key.decrypt(padding, &enc)
+                let padding = Oaep::<RsaSha256>::new();
+                let nonce_bytes = private_key
+                    .decrypt(padding, &enc)
                     .map_err(|e| anyhow::anyhow!("RSA decrypt failed: {}", e))?;
 
                 // proof = base64url(sha256(nonce)) no padding
@@ -185,24 +204,33 @@ async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
 
             // Server responds with fingerprint (what goes in the QR URL)
             "pending_remote_init" => {
-                let fingerprint = msg.fingerprint
+                let fingerprint = msg
+                    .fingerprint
                     .ok_or_else(|| anyhow::anyhow!("pending_remote_init missing fingerprint"))?;
 
                 // Build QR URL and render PNG
                 let qr_url = format!("https://discordapp.com/ra/{}", fingerprint);
                 let png_b64 = make_qr_png(&qr_url)?;
-                let _ = app.emit("qr_login_event", QrEvent::QrReady { png_b64, fingerprint });
+                let _ = app.emit(
+                    "qr_login_event",
+                    QrEvent::QrReady {
+                        png_b64,
+                        fingerprint,
+                    },
+                );
             }
 
             // User scanned — payload contains "id:avatar_hash:discriminator:username"
             "pending_finish" => {
-                let enc_b64 = msg.encrypted_user_payload
-                    .ok_or_else(|| anyhow::anyhow!("pending_finish missing encrypted_user_payload"))?;
+                let enc_b64 = msg.encrypted_user_payload.ok_or_else(|| {
+                    anyhow::anyhow!("pending_finish missing encrypted_user_payload")
+                })?;
 
                 let enc = B64.decode(&enc_b64)?;
-                let padding = Oaep::new::<Sha256>();
-                let plain = private_key.decrypt(padding, &enc)
-                    .map_err(|_| anyhow::anyhow!("AES-CBC -> RSA decrypt failed for user payload"))?;
+                let padding = Oaep::<RsaSha256>::new();
+                let plain = private_key.decrypt(padding, &enc).map_err(|_| {
+                    anyhow::anyhow!("AES-CBC -> RSA decrypt failed for user payload")
+                })?;
                 let text = String::from_utf8_lossy(&plain).to_string();
 
                 // format: "id:avatar:discriminator:username"
@@ -217,44 +245,69 @@ async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
                     // Nós emitimos isso para o frontend para trocar o ticket pelo token!
                     // Ou podemos pegar o token diretamente via HTTP POST aqui no backend!
                     let client = reqwest::Client::new();
-                    let res = client.post("https://discord.com/api/v9/users/@me/remote-auth/login")
+                    let res = client
+                        .post("https://discord.com/api/v10/users/@me/remote-auth/login")
                         .json(&serde_json::json!({ "ticket": ticket }))
                         .send()
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to POST ticket: {}", e))?;
-                        
-                    let body: serde_json::Value = res.json()
+
+                    if !res.status().is_success() {
+                        return Err(anyhow::anyhow!(
+                            "Discord recusou o ticket do login remoto (HTTP {})",
+                            res.status()
+                        ));
+                    }
+
+                    let body: serde_json::Value = res
+                        .json()
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to read ticket response: {}", e))?;
-                        
-                    let enc_b64 = body.get("encrypted_token")
+
+                    let enc_b64 = body
+                        .get("encrypted_token")
                         .and_then(|t| t.as_str())
                         .ok_or_else(|| anyhow::anyhow!("Response missing encrypted_token"))?;
-                        
+
                     let enc = B64.decode(enc_b64)?;
-                    let padding = Oaep::new::<Sha256>();
-                    let token_bytes = private_key.decrypt(padding, &enc)
+                    let padding = Oaep::<RsaSha256>::new();
+                    let token_bytes = private_key
+                        .decrypt(padding, &enc)
                         .map_err(|_| anyhow::anyhow!("RSA decrypt failed for token from ticket"))?;
-                    let token = String::from_utf8(token_bytes)
+                    let mut token = String::from_utf8(token_bytes)
                         .map_err(|_| anyhow::anyhow!("Token not valid UTF-8"))?;
 
-                    let _ = app.emit("qr_login_event", QrEvent::Confirmed { token });
+                    let account = add_account_from_token(&token, &app)
+                        .await
+                        .map_err(anyhow::Error::msg);
+                    token.zeroize();
+                    let account = account?;
+
+                    let _ = app.emit("qr_login_event", QrEvent::Confirmed { account });
                     ws.close(None).await.ok();
                     return Ok(());
                 }
 
                 // Fallback para v1 ou se vier no mesmo payload
-                let enc_b64 = msg.encrypted_token
-                    .ok_or_else(|| anyhow::anyhow!("pending_login missing encrypted_token or ticket"))?;
+                let enc_b64 = msg.encrypted_token.ok_or_else(|| {
+                    anyhow::anyhow!("pending_login missing encrypted_token or ticket")
+                })?;
 
                 let enc = B64.decode(&enc_b64)?;
-                let padding = Oaep::new::<Sha256>();
-                let token_bytes = private_key.decrypt(padding, &enc)
+                let padding = Oaep::<RsaSha256>::new();
+                let token_bytes = private_key
+                    .decrypt(padding, &enc)
                     .map_err(|_| anyhow::anyhow!("RSA decrypt failed for token"))?;
-                let token = String::from_utf8(token_bytes)
+                let mut token = String::from_utf8(token_bytes)
                     .map_err(|_| anyhow::anyhow!("Token not valid UTF-8"))?;
 
-                let _ = app.emit("qr_login_event", QrEvent::Confirmed { token });
+                let account = add_account_from_token(&token, &app)
+                    .await
+                    .map_err(anyhow::Error::msg);
+                token.zeroize();
+                let account = account?;
+
+                let _ = app.emit("qr_login_event", QrEvent::Confirmed { account });
                 ws.close(None).await.ok();
                 return Ok(());
             }
@@ -272,8 +325,7 @@ async fn run_flow(app: AppHandle) -> anyhow::Result<()> {
 }
 
 fn make_qr_png(content: &str) -> anyhow::Result<String> {
-    let code = QrCode::new(content.as_bytes())
-        .map_err(|e| anyhow::anyhow!("QR encode: {}", e))?;
+    let code = QrCode::new(content.as_bytes()).map_err(|e| anyhow::anyhow!("QR encode: {}", e))?;
 
     let img = code
         .render::<Luma<u8>>()

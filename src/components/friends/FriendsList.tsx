@@ -94,7 +94,7 @@ export function FriendsList({ tab, searchQuery }: Props) {
         {filteredList.map((rel) => {
           const user = rel.user;
           const displayName = rel.nickname || user.global_name || user.username;
-          const status = (presences?.[user.id]?.status as any) || "offline";
+          const status = presences?.[user.id]?.status || "offline";
 
           return (
             <UserContextMenu key={rel.id} userId={user.id}>

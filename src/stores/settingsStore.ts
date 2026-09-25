@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { load } from "@tauri-apps/plugin-store";
 import { applyTheme } from "@/lib/themeManager";
+import { getAppStore, persistStoreEntries } from "@/lib/appStore";
+import { toast } from "@/components/ui/Toast";
 
 export type ThemeId = "dark" | "light" | "midnight" | "system" | "custom" | string;
 export type DisplayMode = "cozy" | "compact";
@@ -58,14 +59,6 @@ const defaultSettings: AppSettings = {
   streamerMode: false,
 };
 
-let storeCache: any = null;
-const getStore = async () => {
-  if (!storeCache) {
-    storeCache = await load("organiccord_settings.json", { autoSave: false } as any);
-  }
-  return storeCache;
-};
-
 interface SettingsStore {
   settings: AppSettings;
   loadSettings: () => Promise<void>;
@@ -77,8 +70,8 @@ export const useSettingsStore = create<SettingsStore>()(
     settings: defaultSettings,
 
     loadSettings: async () => {
-      const store = await getStore();
-      const savedSettings = await (store as any).get("app_settings") as Partial<AppSettings>;
+      const store = await getAppStore();
+      const savedSettings = await store.get<Partial<AppSettings>>("app_settings");
       if (savedSettings) {
         set((s) => {
           s.settings = { ...defaultSettings, ...savedSettings };
@@ -92,10 +85,9 @@ export const useSettingsStore = create<SettingsStore>()(
         s.settings[key] = value;
       });
       applyTheme(get().settings);
-      // Persist
-      getStore().then(store => {
-        store.set("app_settings", get().settings);
-        store.save();
+      void persistStoreEntries([["app_settings", get().settings]]).catch((error: unknown) => {
+        console.error("Não foi possível salvar as configurações locais.", error);
+        toast.error("Não foi possível salvar esta configuração. Tente novamente.");
       });
     }
   }))

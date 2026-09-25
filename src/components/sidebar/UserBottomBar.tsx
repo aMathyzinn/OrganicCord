@@ -1,14 +1,16 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useAccountStore, type PresenceStatus } from "@/stores/accountStore";
 import { useNavigationStore } from "@/stores/navigationStore";
+import { useGameActivityStore } from "@/stores/gameActivityStore";
 import { fetchUserProfile, getSelfProfile } from "@/lib/tauri";
 import { Avatar } from "@/components/ui/Avatar";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { getBannerUrl } from "@/lib/utils";
 import { toast } from "@/components/ui/Toast";
+import type { DiscordUserProfile, StoredAccount } from "@/types";
 import { 
   Mic, MicOff, Headphones, Settings, Pencil, 
-  ChevronRight, Copy, Users, Zap, Check, Moon, Circle, MinusCircle, Film, Plus
+  ChevronRight, Copy, Users, Zap, Check, Moon, Circle, MinusCircle, Film, Plus, Gamepad2, Clock3
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<PresenceStatus, { label: string; color: string; icon: React.ReactNode }> = {
@@ -25,6 +27,7 @@ interface UserBottomBarProps {
 export function UserBottomBar({ onAddAccount }: UserBottomBarProps) {
   const { accounts, presenceStatus, customStatus } = useAccountStore();
   const { activeAccountId, openSettings } = useNavigationStore();
+  const detectedGame = useGameActivityStore((state) => state.detectedGame);
   
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -32,6 +35,7 @@ export function UserBottomBar({ onAddAccount }: UserBottomBarProps) {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const currentAccount = accounts.find((a) => a.id === activeAccountId);
+  const isShowingGame = Boolean(detectedGame);
 
   // Close popover when clicking outside
   useEffect(() => {
@@ -56,19 +60,23 @@ export function UserBottomBar({ onAddAccount }: UserBottomBarProps) {
       style={{
         position: "relative",
         width: "100%",
-        height: 52,
+        minHeight: isShowingGame ? 74 : 52,
         background: "var(--bg-tertiary)",
         borderTop: "1px solid var(--border-subtle)",
         display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "0 8px",
+        flexDirection: "column",
+        alignItems: "stretch",
+        justifyContent: "center",
+        padding: isShowingGame ? "5px 8px 4px" : "0 8px",
         boxSizing: "border-box",
         userSelect: "none",
         flexShrink: 0,
         zIndex: 50,
       }}
     >
+      {isShowingGame && detectedGame && <GameActivityLine name={detectedGame.name} startedAt={detectedGame.startedAt} />}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 44 }}>
       {/* Clickable User Pill (Opens Floating Popover) */}
       <div
         onClick={() => setIsPopoverOpen((prev) => !prev)}
@@ -179,6 +187,7 @@ export function UserBottomBar({ onAddAccount }: UserBottomBarProps) {
           </button>
         </Tooltip>
       </div>
+      </div>
 
       {/* FLOATING USER PROFILE & STATUS POPOVER */}
       {isPopoverOpen && (
@@ -193,6 +202,30 @@ export function UserBottomBar({ onAddAccount }: UserBottomBarProps) {
   );
 }
 
+function GameActivityLine({ name, startedAt }: { name: string; startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const elapsedSeconds = Math.max(0, Math.floor((now - startedAt) / 1_000));
+  const hours = Math.floor(elapsedSeconds / 3_600);
+  const minutes = Math.floor((elapsedSeconds % 3_600) / 60);
+  const seconds = elapsedSeconds % 60;
+  const elapsed = hours > 0
+    ? `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+    : `${minutes}:${seconds.toString().padStart(2, "0")}`;
+
+  return (
+    <div title={`Jogando ${name} há ${elapsed}`} style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, padding: "0 6px 3px", color: "var(--status-online)" }}>
+      <Gamepad2 size={14} aria-hidden />
+      <span className="truncate" style={{ flex: 1, fontSize: 12, fontWeight: 600, color: "var(--text-normal)" }}>Jogando {name}</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0, color: "var(--text-muted)", fontSize: 11 }}><Clock3 size={11} aria-hidden />{elapsed}</span>
+    </div>
+  );
+}
+
 {/* ============================================================ */}
 {/* FLOATING USER STATUS POPOVER COMPONENT                       */}
 {/* ============================================================ */}
@@ -202,7 +235,7 @@ function FloatingUserStatusPopover({
   onClose,
   onAddAccount,
 }: {
-  account: any;
+  account: StoredAccount;
   currentPresence: PresenceStatus;
   onClose: () => void;
   onAddAccount?: () => void;
@@ -210,7 +243,7 @@ function FloatingUserStatusPopover({
   const { setPresenceStatus, accounts, presenceStatus } = useAccountStore();
   const { activeAccountId, setActiveAccount, openSettings } = useNavigationStore();
   
-  const [profileData, setProfileData] = useState<any>(null);
+  const [profileData, setProfileData] = useState<DiscordUserProfile | null>(null);
   const [activeSubmenu, setActiveSubmenu] = useState<"none" | "status" | "accounts">("none");
 
   // Fetch user profile data on popover open
@@ -227,7 +260,7 @@ function FloatingUserStatusPopover({
   const bannerHash = profileData?.user_profile?.banner || profileData?.user?.banner || account.banner;
   const accentColorNum = profileData?.user_profile?.accent_color ?? profileData?.user?.accent_color ?? account.accent_color;
   const accentColorHex = accentColorNum ? `#${accentColorNum.toString(16).padStart(6, '0')}` : (account.color || "#5865f2");
-  const rawBannerUrl = getBannerUrl(account.user_id, bannerHash, 600);
+  const rawBannerUrl = getBannerUrl(account.user_id, bannerHash ?? null, 600);
   const bannerUrl = hasNitro ? rawBannerUrl : null;
   const bio = profileData?.user_profile?.bio || profileData?.user?.bio || account.bio || "";
 

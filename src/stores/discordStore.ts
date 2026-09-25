@@ -10,14 +10,15 @@ import type {
   DiscordEmoji,
   DiscordRole,
   DiscordMember,
-  DiscordThread
+  DiscordThread,
+  DiscordGatewayGuild,
 } from "@/types";
 import * as api from "@/lib/tauri";
 import { checkMessageSendLimit, checkMessageDeleteLimit, checkReactionLimit } from "@/lib/rateLimiter";
 
-export function normalizePresence(presence: any): { userId: string; normalized: DiscordPresence } | null {
-  if (!presence) return null;
-  const userId = presence.user?.id || presence.user_id || presence.id;
+export function normalizePresence(presence: DiscordPresence | null | undefined): { userId: string; normalized: DiscordPresence } | null {
+  if (!presence?.user?.id) return null;
+  const userId = presence.user.id;
   if (!userId) return null;
 
   const normalized: DiscordPresence = {
@@ -37,11 +38,12 @@ export function normalizePresence(presence: any): { userId: string; normalized: 
 
 interface DiscordCache {
   guilds: Record<string, DiscordGuild[]>;         // accountId → guilds
-  channels: Record<string, DiscordChannel[]>;     // guildId → channels
+  channels: Record<string, Record<string, DiscordChannel[]>>; // accountId → guildId → channels
   messages: Record<string, DiscordMessage[]>;     // channelId → messages
   dms: Record<string, DiscordDM[]>;               // accountId → DMs
   guildEmojis: Record<string, Record<string, DiscordEmoji[]>>; // accountId -> guildId -> emojis
   guildRoles: Record<string, Record<string, DiscordRole[]>>; // accountId -> guildId -> roles
+  guildMembers: Record<string, Record<string, DiscordMember>>; // accountId -> guildId -> current member
   session_ids: Record<string, string>;            // accountId -> sessionId
   relationships: Record<string, DiscordRelationship[]>; // accountId → relationships
   presences: Record<string, Record<string, DiscordPresence>>; // accountId -> userId -> presence
@@ -53,19 +55,73 @@ interface DiscordCache {
 
 interface LoadingState {
   guilds: Record<string, boolean>;
-  channels: Record<string, boolean>;
   messages: Record<string, boolean>;
   threads: Record<string, boolean>;
+}
+
+export type GuildChannelLoadStatus = "idle" | "loading" | "ready" | "empty" | "error";
+
+export interface GuildChannelLoadState {
+  status: GuildChannelLoadStatus;
+  source?: "gateway" | "rest";
+  requestId?: string;
+  updatedAt?: number;
+}
+
+export function channelErrorKey(accountId: string, guildId: string): string {
+  return `channels-${accountId}-${guildId}`;
+}
+
+function mergeChannels(
+  current: readonly DiscordChannel[],
+  incoming: readonly DiscordChannel[],
+): DiscordChannel[] {
+  const merged = new Map(current.map((channel) => [channel.id, channel]));
+  incoming.forEach((channel) => {
+    merged.set(channel.id, { ...merged.get(channel.id), ...channel });
+  });
+  return [...merged.values()].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+}
+
+function normalizeGatewayChannel(value: unknown): DiscordChannel | null {
+  const channel = value as Partial<DiscordChannel> & { type?: unknown };
+  const channelType = Number(channel.channel_type ?? channel.type);
+  if (typeof channel.id !== "string" || !Number.isFinite(channelType)) return null;
+  return {
+    ...channel,
+    id: channel.id,
+    name: typeof channel.name === "string" ? channel.name : null,
+    channel_type: channelType,
+    position: typeof channel.position === "number" ? channel.position : null,
+    parent_id: typeof channel.parent_id === "string" ? channel.parent_id : null,
+    topic: typeof channel.topic === "string" ? channel.topic : null,
+    nsfw: typeof channel.nsfw === "boolean" ? channel.nsfw : null,
+  } as DiscordChannel;
+}
+
+let channelRequestSequence = 0;
+
+function nextChannelRequestId(accountId: string, guildId: string): string {
+  channelRequestSequence += 1;
+  return `${accountId}:${guildId}:${channelRequestSequence}`;
 }
 
 interface DiscordStore {
   cache: DiscordCache;
   loading: LoadingState;
+  channelLoads: Record<string, Record<string, GuildChannelLoadState>>;
   errors: Record<string, string>;
 
   setSessionId: (accountId: string, sessionId: string) => void;
   fetchGuilds: (accountId: string) => Promise<void>;
-  fetchChannels: (accountId: string, guildId: string) => Promise<void>;
+  fetchChannels: (accountId: string, guildId: string, force?: boolean) => Promise<void>;
+  hydrateGuildFromGateway: (accountId: string, guild: DiscordGatewayGuild) => void;
+  applyGuildChannelEvent: (
+    accountId: string,
+    guildId: string,
+    channel: DiscordChannel,
+    deleted: boolean,
+  ) => void;
   fetchForumThreads: (accountId: string, channelId: string, guildId: string) => Promise<void>;
   fetchMessages: (accountId: string, channelId: string) => Promise<void>;
   fetchMoreMessages: (accountId: string, channelId: string) => Promise<void>;
@@ -85,7 +141,7 @@ interface DiscordStore {
     content: string,
     replyTo: string | undefined,
     fileName: string,
-    filePath?: string,
+    fileHandle?: string,
     fileData?: Uint8Array
   ) => Promise<void>;
   sendVoiceMessage: (
@@ -99,8 +155,18 @@ interface DiscordStore {
   addReaction: (accountId: string, channelId: string, messageId: string, emoji: string) => Promise<void>;
   removeReaction: (accountId: string, channelId: string, messageId: string, emoji: string) => Promise<void>;
   prependMessage: (channelId: string, message: DiscordMessage) => void;
+  updateMessageFromGateway: (channelId: string, message: Partial<DiscordMessage> & { id: string }) => void;
+  removeMessageFromGateway: (channelId: string, messageId: string) => void;
+  applyGatewayReaction: (
+    channelId: string,
+    messageId: string,
+    emoji: { id: string | null; name: string },
+    added: boolean,
+    isCurrentUser: boolean
+  ) => void;
   addGuildEmojis: (accountId: string, guildId: string, emojis: DiscordEmoji[]) => void;
   addGuildRoles: (accountId: string, guildId: string, roles: DiscordRole[]) => void;
+  addGuildMember: (accountId: string, guildId: string, member: DiscordMember) => void;
   updatePresence: (accountId: string, presence: DiscordPresence) => void;
   updatePresences: (accountId: string, presences: DiscordPresence[]) => void;
   incrementUnread: (accountId: string, channelId: string, hasMention: boolean, guildId?: string) => void;
@@ -120,6 +186,7 @@ export const useDiscordStore = create<DiscordStore>()(
       dms: {}, 
       guildEmojis: {}, 
       guildRoles: {},
+      guildMembers: {},
       session_ids: {},
       relationships: {}, 
       presences: {}, 
@@ -128,7 +195,8 @@ export const useDiscordStore = create<DiscordStore>()(
       unreads: {},
       typingUsers: {}
     },
-    loading: { guilds: {}, channels: {}, messages: {}, threads: {} },
+    loading: { guilds: {}, messages: {}, threads: {} },
+    channelLoads: {},
     errors: {},
     
     setSessionId: (accountId, sessionId) => {
@@ -168,11 +236,32 @@ export const useDiscordStore = create<DiscordStore>()(
       }
     },
 
-    fetchChannels: async (accountId, guildId) => {
-      if (get().loading.channels[guildId]) return;
-      set((s) => { s.loading.channels[guildId] = true; });
+    fetchChannels: async (accountId, guildId, force = false) => {
+      const currentLoad = get().channelLoads[accountId]?.[guildId];
+      if (!force && currentLoad?.status === "loading") return;
+
+      const requestId = nextChannelRequestId(accountId, guildId);
+      const startedAt = performance.now();
+      const errorKey = channelErrorKey(accountId, guildId);
+      console.info("[guild-content] channels_request_started", { accountId, guildId, requestId, force });
+      set((s) => {
+        if (!s.channelLoads[accountId]) s.channelLoads[accountId] = {};
+        s.channelLoads[accountId][guildId] = {
+          status: "loading",
+          requestId,
+          source: currentLoad?.source,
+          updatedAt: currentLoad?.updatedAt,
+        };
+        delete s.errors[errorKey];
+      });
       try {
-        const channels = await api.getChannels(accountId, guildId);
+        const [channels, member] = await Promise.all([
+          api.getChannels(accountId, guildId),
+          api.getCurrentGuildMember(accountId, guildId).catch((error) => {
+            console.warn("[discordStore] current guild member unavailable:", error);
+            return null;
+          }),
+        ]);
         // Subscribe to presences and members for this guild
         api.subscribeGuild(accountId, guildId).catch(console.error);
         
@@ -185,8 +274,28 @@ export const useDiscordStore = create<DiscordStore>()(
 
         // Ordena por posição
         channels.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        let responseCommitted = false;
         set((s) => {
-          s.cache.channels[guildId] = channels;
+          const activeRequest = s.channelLoads[accountId]?.[guildId]?.requestId;
+          if (activeRequest !== requestId) {
+            console.info("[guild-content] channels_response_discarded", {
+              accountId,
+              guildId,
+              requestId,
+              activeRequest,
+            });
+            return;
+          }
+
+          if (!s.cache.channels[accountId]) s.cache.channels[accountId] = {};
+          const previous = s.cache.channels[accountId][guildId] ?? [];
+          if (channels.length > 0 || previous.length === 0) {
+            s.cache.channels[accountId][guildId] = channels;
+          }
+          if (member) {
+            if (!s.cache.guildMembers[accountId]) s.cache.guildMembers[accountId] = {};
+            s.cache.guildMembers[accountId][guildId] = member;
+          }
           
           if (!s.cache.unreads[accountId]) s.cache.unreads[accountId] = {};
           
@@ -210,28 +319,135 @@ export const useDiscordStore = create<DiscordStore>()(
             }
           }
           
-          s.loading.channels[guildId] = false;
+          s.channelLoads[accountId][guildId] = {
+            status: (channels.length > 0 || previous.length > 0) ? "ready" : "empty",
+            source: channels.length > 0 ? "rest" : s.channelLoads[accountId][guildId].source,
+            updatedAt: Date.now(),
+          };
+          delete s.errors[errorKey];
+          responseCommitted = true;
         });
+        if (responseCommitted) {
+          console.info("[guild-content] channels_request_succeeded", {
+            accountId,
+            guildId,
+            requestId,
+            channelCount: channels.length,
+            durationMs: Math.round(performance.now() - startedAt),
+          });
+        }
       } catch (e) {
+        let failureCommitted = false;
         set((s) => {
-          s.errors[`channels-${guildId}`] = String(e);
-          s.loading.channels[guildId] = false;
+          const activeRequest = s.channelLoads[accountId]?.[guildId]?.requestId;
+          if (activeRequest !== requestId) return;
+          const previous = s.cache.channels[accountId]?.[guildId] ?? [];
+          s.errors[errorKey] = String(e);
+          s.channelLoads[accountId][guildId] = {
+            status: previous.length > 0 ? "ready" : "error",
+            source: s.channelLoads[accountId][guildId].source,
+            updatedAt: s.channelLoads[accountId][guildId].updatedAt,
+          };
+          failureCommitted = true;
+        });
+        if (failureCommitted) {
+          console.error("[guild-content] channels_request_failed", {
+            accountId,
+            guildId,
+            requestId,
+            durationMs: Math.round(performance.now() - startedAt),
+            error: String(e),
+          });
+        }
+      }
+    },
+
+    hydrateGuildFromGateway: (accountId, guild) => {
+      if (guild.unavailable) {
+        console.info("[guild-content] gateway_guild_unavailable", { accountId, guildId: guild.id });
+        return;
+      }
+
+      const incoming = [...(guild.channels ?? []), ...(guild.threads ?? [])]
+        .map(normalizeGatewayChannel)
+        .filter((channel): channel is DiscordChannel => channel !== null);
+      set((s) => {
+        if (
+          typeof guild.name === "string" &&
+          typeof guild.owner === "boolean" &&
+          typeof guild.permissions === "string"
+        ) {
+          if (!s.cache.guilds[accountId]) s.cache.guilds[accountId] = [];
+          const guildIndex = s.cache.guilds[accountId].findIndex((item) => item.id === guild.id);
+          const minimalGuild: DiscordGuild = {
+            id: guild.id,
+            name: guild.name,
+            icon: guild.icon ?? null,
+            owner: guild.owner,
+            permissions: guild.permissions,
+          };
+          if (guildIndex >= 0) s.cache.guilds[accountId][guildIndex] = minimalGuild;
+          else s.cache.guilds[accountId].push(minimalGuild);
+        }
+
+        if (incoming.length === 0) return;
+        if (!s.cache.channels[accountId]) s.cache.channels[accountId] = {};
+        s.cache.channels[accountId][guild.id] = mergeChannels(
+          s.cache.channels[accountId][guild.id] ?? [],
+          incoming,
+        );
+        if (!s.channelLoads[accountId]) s.channelLoads[accountId] = {};
+        const activeRequest = s.channelLoads[accountId][guild.id]?.requestId;
+        s.channelLoads[accountId][guild.id] = {
+          status: "ready",
+          source: "gateway",
+          requestId: activeRequest,
+          updatedAt: Date.now(),
+        };
+        delete s.errors[channelErrorKey(accountId, guild.id)];
+      });
+      if (incoming.length > 0) {
+        console.info("[guild-content] channels_cache_committed", {
+          accountId,
+          guildId: guild.id,
+          source: "gateway",
+          channelCount: incoming.length,
         });
       }
     },
 
+    applyGuildChannelEvent: (accountId, guildId, channel, deleted) => {
+      set((s) => {
+        if (!s.cache.channels[accountId]) s.cache.channels[accountId] = {};
+        const current = s.cache.channels[accountId][guildId] ?? [];
+        s.cache.channels[accountId][guildId] = deleted
+          ? current.filter((item) => item.id !== channel.id)
+          : mergeChannels(current, [channel]);
+        if (!s.channelLoads[accountId]) s.channelLoads[accountId] = {};
+        const activeRequest = s.channelLoads[accountId][guildId]?.requestId;
+        s.channelLoads[accountId][guildId] = {
+          status: s.cache.channels[accountId][guildId].length > 0 ? "ready" : "empty",
+          source: "gateway",
+          requestId: activeRequest,
+          updatedAt: Date.now(),
+        };
+      });
+      console.info("[guild-content] gateway_channel_committed", {
+        accountId,
+        guildId,
+        channelId: channel.id,
+        operation: deleted ? "delete" : "upsert",
+      });
+    },
+
     fetchForumThreads: async (accountId, channelId, guildId) => {
-      console.log(`[discordStore] fetchForumThreads called with accountId: ${accountId}, channelId: ${channelId}, guildId: ${guildId}. Loading state: ${get().loading.threads[channelId]}`);
       if (!accountId || !channelId || !guildId) return;
       if (get().loading.threads[channelId]) return;
       set((s) => { s.loading.threads[channelId] = true; });
       try {
         const response = await api.getForumThreads(accountId, channelId, guildId);
-        console.log(`[discordStore] fetchForumThreads raw response keys:`, Object.keys(response));
-        console.log(`[discordStore] fetchForumThreads raw response preview:`, JSON.stringify(response).substring(0, 300));
         // Dependendo da estrutura de search, pode ter 'threads', 'posts', ou a array pode estar na raiz
         const threads = response.threads || (Array.isArray(response) ? response : []);
-        console.log(`[discordStore] extracted threads count:`, threads.length);
         set((s) => {
           // Salvar threads na key do guildId, mas como não temos o guildId aqui facilmente,
           // podemos mapear por channelId? Wait! A cache.threads é Record<string, any[]>.
@@ -355,7 +571,6 @@ export const useDiscordStore = create<DiscordStore>()(
     },
 
     fetchRelationships: async (accountId) => {
-      console.log("fetchRelationships called for account:", accountId);
       try {
         const [rels, presences] = await Promise.all([
           api.getRelationships(accountId),
@@ -364,7 +579,6 @@ export const useDiscordStore = create<DiscordStore>()(
             return [];
           })
         ]);
-        console.log("getGatewayPresences returned:", presences);
         set((s) => { 
           s.cache.relationships[accountId] = rels; 
           if (!s.cache.presences[accountId]) {
@@ -459,7 +673,7 @@ export const useDiscordStore = create<DiscordStore>()(
       try {
         const message = await api.sendMessage(accountId, channelId, content, replyTo);
         get().prependMessage(channelId, message);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Erro ao enviar mensagem:", err);
         const clydeMsg: DiscordMessage = {
           id: "clyde-" + Date.now(),
@@ -524,14 +738,14 @@ export const useDiscordStore = create<DiscordStore>()(
       }
     },
 
-    sendMessageWithAttachment: async (accountId, channelId, content, replyTo, fileName, filePath, fileData) => {
+    sendMessageWithAttachment: async (accountId, channelId, content, replyTo, fileName, fileHandle, fileData) => {
       const message = await api.sendMessageWithAttachment(
         accountId,
         channelId,
         content,
         replyTo,
         fileName,
-        filePath,
+        fileHandle,
         fileData
       );
       get().prependMessage(channelId, message);
@@ -587,8 +801,8 @@ export const useDiscordStore = create<DiscordStore>()(
       try {
         await api.addReaction(accountId, channelId, messageId, emoji);
       } catch (e) {
-        // Rollback
         console.error(e);
+        get().applyGatewayReaction(channelId, messageId, { id: null, name: emoji }, false, true);
       }
     },
 
@@ -617,6 +831,7 @@ export const useDiscordStore = create<DiscordStore>()(
         await api.removeReaction(accountId, channelId, messageId, emoji);
       } catch (e) {
         console.error(e);
+        get().applyGatewayReaction(channelId, messageId, { id: null, name: emoji }, true, true);
       }
     },
 
@@ -664,6 +879,57 @@ export const useDiscordStore = create<DiscordStore>()(
         if (!s.cache.guildRoles) s.cache.guildRoles = {};
         if (!s.cache.guildRoles[accountId]) s.cache.guildRoles[accountId] = {};
         s.cache.guildRoles[accountId][guildId] = roles;
+      });
+    },
+
+    updateMessageFromGateway: (channelId, message) => {
+      set((s) => {
+        const existing = s.cache.messages[channelId]?.find((item) => item.id === message.id);
+        if (existing) Object.assign(existing, message);
+      });
+    },
+
+    removeMessageFromGateway: (channelId, messageId) => {
+      set((s) => {
+        const messages = s.cache.messages[channelId];
+        if (messages) {
+          s.cache.messages[channelId] = messages.filter((message) => message.id !== messageId);
+        }
+      });
+    },
+
+    applyGatewayReaction: (channelId, messageId, emoji, added, isCurrentUser) => {
+      set((s) => {
+        const message = s.cache.messages[channelId]?.find((item) => item.id === messageId);
+        if (!message) return;
+        if (!message.reactions) message.reactions = [];
+
+        const index = message.reactions.findIndex(
+          (reaction) => reaction.emoji.id === emoji.id && reaction.emoji.name === emoji.name
+        );
+        if (added) {
+          if (index >= 0) {
+            if (!isCurrentUser || !message.reactions[index].me) {
+              message.reactions[index].count += 1;
+            }
+            if (isCurrentUser) message.reactions[index].me = true;
+          } else {
+            message.reactions.push({ count: 1, me: isCurrentUser, emoji });
+          }
+        } else if (index >= 0) {
+          if (!isCurrentUser || message.reactions[index].me) {
+            message.reactions[index].count = Math.max(0, message.reactions[index].count - 1);
+          }
+          if (isCurrentUser) message.reactions[index].me = false;
+          if (message.reactions[index].count === 0) message.reactions.splice(index, 1);
+        }
+      });
+    },
+
+    addGuildMember: (accountId, guildId, member) => {
+      set((s) => {
+        if (!s.cache.guildMembers[accountId]) s.cache.guildMembers[accountId] = {};
+        s.cache.guildMembers[accountId][guildId] = member;
       });
     },
 
@@ -761,7 +1027,9 @@ export const useDiscordStore = create<DiscordStore>()(
     clearCache: (accountId) => {
       set((s) => {
         delete s.cache.guilds[accountId];
+        delete s.cache.channels[accountId];
         delete s.cache.dms[accountId];
+        delete s.channelLoads[accountId];
       });
     },
   }))

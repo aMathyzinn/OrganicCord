@@ -1,36 +1,41 @@
+use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
-use aes_gcm::aead::rand_core::RngCore;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use keyring::Entry;
+use zeroize::{Zeroize, Zeroizing};
 
 const SERVICE_NAME: &str = "OrganicCord";
 const KEY_ENTRY: &str = "encryption_key";
 
 /// Obtém ou cria a chave de criptografia AES-256 armazenada no keychain do OS.
-fn get_or_create_key() -> Result<Vec<u8>> {
-    let entry = Entry::new(SERVICE_NAME, KEY_ENTRY)
-        .map_err(|e| anyhow!("Keyring error: {}", e))?;
+fn get_or_create_key() -> Result<Zeroizing<Vec<u8>>> {
+    let entry = Entry::new(SERVICE_NAME, KEY_ENTRY).map_err(|e| anyhow!("Keyring error: {}", e))?;
 
     match entry.get_password() {
-        Ok(stored) => {
-            let key = BASE64.decode(stored)?;
+        Ok(mut stored) => {
+            let key = BASE64.decode(&stored)?;
+            stored.zeroize();
             if key.len() != 32 {
                 return Err(anyhow!("Invalid key length"));
             }
-            Ok(key)
+            Ok(Zeroizing::new(key))
         }
-        Err(_) => {
-            let mut key = vec![0u8; 32];
+        Err(keyring::Error::NoEntry) => {
+            let mut key = Zeroizing::new(vec![0u8; 32]);
             OsRng.fill_bytes(&mut key);
-            let encoded = BASE64.encode(&key);
-            entry.set_password(&encoded)
+            let encoded = Zeroizing::new(BASE64.encode(&*key));
+            entry
+                .set_password(&encoded)
                 .map_err(|e| anyhow!("Could not store key: {}", e))?;
             Ok(key)
         }
+        Err(error) => Err(anyhow!(
+            "Não foi possível acessar o cofre seguro do sistema: {error}"
+        )),
     }
 }
 
@@ -38,7 +43,7 @@ fn get_or_create_key() -> Result<Vec<u8>> {
 /// Retorna: base64(nonce || ciphertext)
 pub fn encrypt_token(token: &str) -> Result<String> {
     let key_bytes = get_or_create_key()?;
-    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(key_bytes.as_slice());
     let cipher = Aes256Gcm::new(key);
 
     let mut nonce_bytes = [0u8; 12];
@@ -57,7 +62,7 @@ pub fn encrypt_token(token: &str) -> Result<String> {
 /// Descriptografa um token Discord.
 pub fn decrypt_token(encrypted: &str) -> Result<String> {
     let key_bytes = get_or_create_key()?;
-    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(key_bytes.as_slice());
     let cipher = Aes256Gcm::new(key);
 
     let combined = BASE64.decode(encrypted)?;

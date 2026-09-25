@@ -1,12 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useNavigationStore } from "@/stores/navigationStore";
-import { useAccountStore } from "@/stores/accountStore";
 import {
   MessagesSquare, MessageCircle, Search, ArrowUpDown, ChevronDown,
   X, Plus, Tag, Loader2, CheckCircle, AlertCircle
 } from "lucide-react";
-import type { DiscordThread, DiscordForumTag } from "@/types";
+import type { DiscordThread, DiscordForumTag, Reaction } from "@/types";
 import { createForumPost } from "@/lib/tauri";
 
 interface Props {
@@ -48,7 +47,7 @@ function ReactionEmoji({ emoji }: { emoji: { id?: string | null; name?: string |
 }
 
 // Extrai a melhor URL de imagem do thread (attachment ou embed)
-function getThreadImage(thread: any): string | null {
+function getThreadImage(thread: DiscordThread): string | null {
   const msg = thread.message;
   if (!msg) return null;
 
@@ -134,8 +133,8 @@ function CreatePostModal({
       setFeedback({ type: "success", msg: "Postagem criada com sucesso!" });
       onCreated();
       setTimeout(onClose, 1200);
-    } catch (e: any) {
-      console.error("Erro ao criar postagem:", e);
+    } catch (error: unknown) {
+      console.error("Erro ao criar postagem:", error);
       setFeedback({ type: "error", msg: "Erro ao criar postagem. Verifique as permissões." });
     } finally {
       setLoading(false);
@@ -360,7 +359,7 @@ function ForumThreadCard({
   const imageUrl = getThreadImage(thread);
 
   // Agrupa reações iguais (por nome ou id)
-  const reactionMap = new Map<string, { emoji: any; count: number }>();
+  const reactionMap = new Map<string, { emoji: Reaction["emoji"]; count: number }>();
   for (const r of reactions) {
     const key = r.emoji?.id || r.emoji?.name || "?";
     if (!reactionMap.has(key)) {
@@ -370,8 +369,6 @@ function ForumThreadCard({
     }
   }
   const groupedReactions = Array.from(reactionMap.values()).slice(0, 5);
-
-  const totalReactions = groupedReactions.reduce((s, r) => s + r.count, 0);
 
   return (
     <div
@@ -522,14 +519,12 @@ function ForumThreadCard({
 export function ForumArea({ channelId, guildId, accountId }: Props) {
   const { cache, loading, fetchForumThreads } = useDiscordStore();
   const { setActiveChannel } = useNavigationStore();
-  const { accounts } = useAccountStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
 
-  const account = accounts.find(a => a.id === accountId);
-  const activeChannel = cache.channels[guildId]?.find(c => c.id === channelId);
-  const availableTags: DiscordForumTag[] = (activeChannel as any)?.available_tags || [];
+  const activeChannel = cache.channels[accountId]?.[guildId]?.find(c => c.id === channelId);
+  const availableTags: DiscordForumTag[] = activeChannel?.available_tags || [];
 
   const loadThreads = useCallback(() => {
     fetchForumThreads(accountId, channelId, guildId);
@@ -545,13 +540,13 @@ export function ForumArea({ channelId, guildId, accountId }: Props) {
   const allThreadsMap = new Map<string, DiscordThread>();
   for (const t of channelThreads) allThreadsMap.set(t.id, t);
   for (const t of guildThreads) {
-    if ((t as any).parent_id === channelId) allThreadsMap.set(t.id, t);
+    if (t.parent_id === channelId) allThreadsMap.set(t.id, t);
   }
 
   let forumThreads = Array.from(allThreadsMap.values());
 
   // Sort: mais recentes primeiro por ID
-  forumThreads.sort((a: any, b: any) => {
+  forumThreads.sort((a, b) => {
     try {
       return BigInt(b.id) > BigInt(a.id) ? 1 : -1;
     } catch {
@@ -590,11 +585,11 @@ export function ForumArea({ channelId, guildId, accountId }: Props) {
         <span style={{ fontWeight: 700, color: "var(--text-normal)", fontSize: 16 }}>
           {activeChannel?.name || "Fórum"}
         </span>
-        {(activeChannel as any)?.topic && (
+        {activeChannel?.topic && (
           <>
             <div style={{ width: 1, height: 20, background: "var(--interactive-muted)", margin: "0 2px" }} />
             <span style={{ fontSize: 13, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 300 }}>
-              {(activeChannel as any).topic}
+              {activeChannel.topic}
             </span>
           </>
         )}

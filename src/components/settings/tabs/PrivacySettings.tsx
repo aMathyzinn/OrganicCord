@@ -1,74 +1,45 @@
-import React from "react";
-import { Shield, Lock, EyeOff } from "lucide-react";
-import { useSettingsStore } from "@/stores/settingsStore";
+import { ExternalLink, ShieldCheck } from "lucide-react";
+import { open } from "@tauri-apps/plugin-shell";
+import { toast } from "@/components/ui/Toast";
 
 export function PrivacySettings() {
-  const { settings, updateSetting } = useSettingsStore();
+  const openDiscord = async () => {
+    try {
+      await open("https://discord.com/channels/@me");
+    } catch (error) {
+      toast.error(`Não foi possível abrir o Discord: ${String(error)}`);
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24, animation: "fadeIn 200ms ease" }}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-normal)", marginBottom: 8 }}>
-        Privacidade e Segurança
-      </h2>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
-          Mensagens Diretas
-        </h3>
-        
-        <div style={{ background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 500, color: "var(--text-normal)" }}>
-              Permitir mensagens diretas de membros do servidor
-            </div>
-            <div style={{ fontSize: 14, color: "var(--text-muted)", marginTop: 4 }}>
-              Esta configuração é aplicada quando você entra em um novo servidor.
-            </div>
-          </div>
-          <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
-            <input 
-              type="checkbox" 
-              checked={settings.allowServerDMs} 
-              onChange={(e) => updateSetting("allowServerDMs", e.target.checked)}
-              style={{ width: 24, height: 24, cursor: "pointer", accentColor: "var(--brand-500)" }} 
-            />
-          </label>
-        </div>
-
-        <div style={{ background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 500, color: "var(--text-normal)" }}>
-              Filtrar conteúdo explícito nas DMs
-            </div>
-            <div style={{ fontSize: 14, color: "var(--text-muted)", marginTop: 4 }}>
-              Proteja-se de imagens indesejadas em mensagens diretas.
-            </div>
-          </div>
-          <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
-            <input 
-              type="checkbox" 
-              checked={settings.filterExplicitDMs} 
-              onChange={(e) => updateSetting("filterExplicitDMs", e.target.checked)}
-              style={{ width: 24, height: 24, cursor: "pointer", accentColor: "var(--brand-500)" }} 
-            />
-          </label>
-        </div>
+      <div>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-normal)", marginBottom: 6 }}>
+          Privacidade e Segurança
+        </h2>
+        <p style={{ color: "var(--text-muted)", fontSize: 14, lineHeight: 1.5, margin: 0 }}>
+          O OrganicCord não simula configurações de conta que não consegue confirmar no Discord.
+        </p>
       </div>
 
-      <div style={{ height: 1, background: "var(--border-subtle)", margin: "8px 0" }} />
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
-          Quem pode te adicionar como amigo
-        </h3>
-        
-        {["Todos", "Amigos de amigos", "Membros do servidor"].map(label => (
-          <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border-subtle)", paddingBottom: 12 }}>
-            <div style={{ fontSize: 16, fontWeight: 500, color: "var(--text-normal)" }}>{label}</div>
-            <label style={{ display: "flex", alignItems: "center", cursor: "pointer" }}>
-              <input type="checkbox" defaultChecked style={{ width: 20, height: 20, cursor: "pointer", accentColor: "var(--brand-500)" }} />
-            </label>
+      <div style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", padding: 20, display: "flex", gap: 14 }}>
+        <ShieldCheck size={24} color="var(--status-online)" style={{ flexShrink: 0 }} />
+        <div>
+          <div style={{ color: "var(--text-normal)", fontWeight: 700, marginBottom: 6 }}>
+            Preferências controladas pela sua conta Discord
           </div>
-        ))}
+          <div style={{ color: "var(--text-muted)", fontSize: 14, lineHeight: 1.5 }}>
+            Filtro de mídia explícita, mensagens diretas de servidores e quem pode enviar solicitações de amizade
+            devem ser alterados no cliente oficial. Assim, a interface não mostra uma opção salva apenas localmente como
+            se ela tivesse sido aplicada à sua conta.
+          </div>
+          <button
+            onClick={openDiscord}
+            style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 8, border: 0, borderRadius: "var(--radius-sm)", background: "var(--brand-500)", color: "white", padding: "9px 14px", fontWeight: 650, cursor: "pointer" }}
+          >
+            Abrir Discord oficial <ExternalLink size={15} />
+          </button>
+        </div>
       </div>
     </div>
   );

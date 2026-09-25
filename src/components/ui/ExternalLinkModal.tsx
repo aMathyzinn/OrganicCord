@@ -3,7 +3,7 @@ import { useExternalLinkStore } from "@/stores/externalLinkStore";
 import { ExternalLink, ShieldAlert, X } from "lucide-react";
 
 export function ExternalLinkModal() {
-  const { isOpen, targetUrl, confirmOpen, closeModal } = useExternalLinkStore();
+  const { isOpen, targetUrl, error, confirmOpen, closeModal } = useExternalLinkStore();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -34,6 +34,9 @@ export function ExternalLinkModal() {
       onClick={closeModal}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="external-link-title"
         onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
@@ -52,6 +55,8 @@ export function ExternalLinkModal() {
       >
         {/* Close Button */}
         <button
+          type="button"
+          aria-label="Fechar aviso de link externo"
           onClick={closeModal}
           style={{
             position: "absolute",
@@ -84,7 +89,7 @@ export function ExternalLinkModal() {
           >
             <ExternalLink size={20} />
           </div>
-          <h3 style={{ fontSize: 18, fontWeight: 700, color: "var(--text-normal)", margin: 0 }}>
+          <h3 id="external-link-title" style={{ fontSize: 18, fontWeight: 700, color: "var(--text-normal)", margin: 0 }}>
             Você está saindo do OrganicCord
           </h3>
         </div>
@@ -118,9 +123,12 @@ export function ExternalLinkModal() {
           <span>Nunca insira sua senha ou chave de acesso em sites desconhecidos.</span>
         </div>
 
+        {error && <div role="alert" style={{ color: "var(--status-danger)", fontSize: 13, lineHeight: 1.4 }}>{error}</div>}
+
         {/* Actions Footer */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 8 }}>
           <button
+            type="button"
             onClick={closeModal}
             style={{
               background: "transparent",
@@ -137,7 +145,9 @@ export function ExternalLinkModal() {
             Cancelar
           </button>
           <button
-            onClick={confirmOpen}
+            type="button"
+            onClick={() => void confirmOpen()}
+            disabled={Boolean(error?.includes("bloqueou"))}
             style={{
               background: "var(--brand-500)",
               color: "#ffffff",
@@ -146,7 +156,8 @@ export function ExternalLinkModal() {
               padding: "10px 20px",
               fontSize: 14,
               fontWeight: 600,
-              cursor: "pointer",
+              cursor: error?.includes("bloqueou") ? "not-allowed" : "pointer",
+              opacity: error?.includes("bloqueou") ? 0.55 : 1,
               boxShadow: "0 2px 6px rgba(88, 101, 242, 0.4)",
               transition: "transform 100ms",
             }}

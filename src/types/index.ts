@@ -10,7 +10,7 @@ export type SessionStatus =
 
 export interface StoredAccount {
   id: string;
-  token_encrypted: string;
+  token_encrypted?: string;
   username: string;
   discriminator: string;
   user_id: string;
@@ -54,6 +54,24 @@ export interface DiscordChannel {
   nsfw: boolean | null;
   available_tags?: DiscordForumTag[];
   last_message_id?: string | null;
+  permission_overwrites?: DiscordPermissionOverwrite[];
+}
+
+export type DiscordGatewayGuild = Partial<DiscordGuild> & {
+  id: string;
+  emojis?: DiscordEmoji[];
+  roles?: DiscordRole[];
+  members?: DiscordMember[];
+  channels?: DiscordChannel[];
+  threads?: DiscordChannel[];
+  unavailable?: boolean;
+};
+
+export interface DiscordPermissionOverwrite {
+  id: string;
+  overwrite_type: 0 | 1;
+  allow: string;
+  deny: string;
 }
 
 export interface DiscordForumTag {
@@ -111,6 +129,63 @@ export interface DiscordUser {
   premium_since?: string | null;
 }
 
+export interface DiscordBadge {
+  id: string;
+  icon: string;
+  description: string;
+}
+
+export interface DiscordUserProfileDetails {
+  bio?: string | null;
+  accent_color?: number | null;
+  banner?: string | null;
+  pronouns?: string;
+  theme_colors?: number[];
+}
+
+export interface DiscordUserProfile {
+  user: DiscordUser;
+  user_profile?: DiscordUserProfileDetails;
+  badges?: DiscordBadge[];
+  mutual_guilds?: Array<{ id: string; nick?: string | null; icon?: string | null }>;
+  mutual_friends?: DiscordUser[];
+  mutual_friends_count?: number;
+  premium_since?: string | null;
+  premium_type?: number | null;
+}
+
+export interface DiscordAuthSession {
+  id_hash: string;
+  current_session?: boolean;
+  approx_last_used_time: string;
+  client_info?: {
+    os?: string;
+    client?: string;
+    location?: string;
+  };
+}
+
+export interface DiscordAuthSessionsResponse {
+  user_sessions?: DiscordAuthSession[];
+}
+
+export interface DiscordInvite {
+  code: string;
+  expires_at?: string | null;
+  guild?: Pick<DiscordGuild, "id" | "name" | "icon">;
+  channel?: Pick<DiscordChannel, "id" | "name" | "channel_type">;
+}
+
+export interface DiscordForumThreadsResponse {
+  threads: DiscordThread[];
+  has_more?: boolean;
+}
+
+export interface DiscordMessageSearchResponse {
+  messages: DiscordMessage[][];
+  total_results?: number;
+}
+
 export interface DiscordRelationship {
   id: string;
   relationship_type: number;
@@ -139,7 +214,7 @@ export interface DiscordActivity {
 
 export interface DiscordPresence {
   user: { id: string; username?: string; discriminator?: string; avatar?: string | null };
-  status: string;
+  status: "online" | "idle" | "dnd" | "offline";
   activities: DiscordActivity[];
   client_status: {
     desktop?: string;
@@ -154,6 +229,7 @@ export interface DiscordMessage {
   guild_id?: string;
   content: string;
   author: DiscordUser;
+  mentions?: DiscordUser[];
   timestamp: string;
   edited_timestamp: string | null;
   attachments: Attachment[];
@@ -167,7 +243,9 @@ export interface DiscordMessage {
     ended_timestamp?: string | null;
   };
   poll?: DiscordPoll;
-  components?: Record<string, unknown>[];
+  components?: DiscordActionRow[];
+  application_id?: string;
+  hit?: boolean;
   flags?: number;
 }
 
@@ -190,8 +268,8 @@ export interface Embed {
   description?: string;
   url?: string;
   color?: number;
-  thumbnail?: { url: string; width?: number; height?: number };
-  image?: { url: string; width?: number; height?: number };
+  thumbnail?: { url: string; proxy_url?: string; width?: number; height?: number };
+  image?: { url: string; proxy_url?: string; width?: number; height?: number };
   video?: { url?: string; width?: number; height?: number };
   provider?: { name: string; url?: string };
   footer?: { text: string; icon_url?: string };
@@ -202,7 +280,38 @@ export interface Embed {
 export interface Reaction {
   count: number;
   me: boolean;
-  emoji: { id: string | null; name: string };
+  emoji: { id: string | null; name: string | null; animated?: boolean };
+}
+
+export interface DiscordComponentEmoji {
+  id?: string | null;
+  name?: string | null;
+  animated?: boolean;
+}
+
+export interface DiscordSelectOption {
+  label: string;
+  value: string;
+  description?: string;
+  emoji?: DiscordComponentEmoji;
+  default?: boolean;
+}
+
+export interface DiscordMessageComponent {
+  type: number;
+  style?: number;
+  label?: string;
+  emoji?: DiscordComponentEmoji;
+  custom_id?: string;
+  url?: string;
+  disabled?: boolean;
+  placeholder?: string;
+  options?: DiscordSelectOption[];
+}
+
+export interface DiscordActionRow {
+  type: 1;
+  components: DiscordMessageComponent[];
 }
 
 export interface DiscordDM {
@@ -231,7 +340,6 @@ export interface AppNotification {
   timestamp: string;
   read: boolean;
 }
-
 
 export interface DiscordPollAnswer {
   answer_id: number;

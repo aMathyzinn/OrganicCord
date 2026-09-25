@@ -1,11 +1,12 @@
-use tauri::State;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use chrono::Utc;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use serde::{Deserialize, Serialize};
+use tauri::State;
+use uuid::Uuid;
 
-use crate::session::{SessionManager, StoredAccount};
+use crate::session::{PublicAccount, SessionManager, StoredAccount};
 use crate::storage;
+use zeroize::Zeroize;
 
 // Helpers de persistência usados também pelo módulo session
 pub fn load_accounts_from_store(app: &tauri::AppHandle) -> Result<Vec<StoredAccount>, String> {
@@ -28,11 +29,13 @@ pub fn save_accounts_to_store(
         .build()
         .map_err(|e| format!("Erro ao abrir store: {}", e))?;
 
-    let val = serde_json::to_value(accounts)
-        .map_err(|e| format!("Erro ao serializar contas: {}", e))?;
+    let val =
+        serde_json::to_value(accounts).map_err(|e| format!("Erro ao serializar contas: {}", e))?;
 
     store.set("accounts", val);
-    store.save().map_err(|e| format!("Erro ao salvar store: {}", e))?;
+    store
+        .save()
+        .map_err(|e| format!("Erro ao salvar store: {}", e))?;
 
     Ok(())
 }
@@ -53,13 +56,12 @@ pub struct AccountInfoResponse {
 
 #[derive(Debug, Serialize)]
 pub struct AddAccountResult {
-    pub account: StoredAccount,
+    pub account: PublicAccount,
 }
 
 fn account_color(index: usize) -> String {
     let colors = [
-        "#5865F2", "#57F287", "#FEE75C", "#EB459E",
-        "#ED4245", "#3BA55D", "#FAA61A", "#00BCD4",
+        "#5865F2", "#57F287", "#FEE75C", "#EB459E", "#ED4245", "#3BA55D", "#FAA61A", "#00BCD4",
     ];
     colors[index % colors.len()].to_string()
 }
@@ -73,46 +75,13 @@ pub async fn validate_token(token: String) -> Result<AccountInfoResponse, String
 /// Adiciona uma nova conta ao gerenciador após validar o token.
 #[tauri::command]
 pub async fn add_account(
-    payload: AddAccountPayload,
+    mut payload: AddAccountPayload,
     _state: State<'_, SessionManager>,
     app: tauri::AppHandle,
 ) -> Result<AddAccountResult, String> {
-    let token = payload.token.trim().to_string();
-
-    if token.is_empty() {
-        return Err("Token não pode ser vazio.".to_string());
-    }
-
-    // Valida o token na API do Discord
-    let user_info = fetch_user_info(&token)
-        .await
-        .map_err(|_| "Token inválido ou sem permissão. Verifique e tente novamente.".to_string())?;
-
-    // Criptografa o token antes de salvar
-    let token_encrypted = storage::encrypt_token(&token)
-        .map_err(|e| format!("Erro ao criptografar token: {}", e))?;
-
-    let existing_accounts = load_accounts_from_store(&app)?;
-    let color = account_color(existing_accounts.len());
-
-    let account = StoredAccount {
-        id: Uuid::new_v4().to_string(),
-        token_encrypted,
-        username: user_info.username.clone(),
-        discriminator: user_info.discriminator.clone(),
-        user_id: user_info.id.clone(),
-        avatar: user_info.avatar.clone(),
-        added_at: Utc::now(),
-        last_used: None,
-        color,
-    };
-
-    // Persiste no store do Tauri
-    let mut accounts = existing_accounts;
-    accounts.push(account.clone());
-    save_accounts_to_store(&app, &accounts)?;
-
-    Ok(AddAccountResult { account })
+    let result = add_account_from_token(payload.token.trim(), &app).await;
+    payload.token.zeroize();
+    result.map(|account| AddAccountResult { account })
 }
 
 /// Remove uma conta pelo ID.
@@ -133,8 +102,9 @@ pub async fn remove_account(
 
 /// Lista todas as contas salvas (sem tokens descriptografados).
 #[tauri::command]
-pub async fn list_accounts(app: tauri::AppHandle) -> Result<Vec<StoredAccount>, String> {
+pub async fn list_accounts(app: tauri::AppHandle) -> Result<Vec<PublicAccount>, String> {
     load_accounts_from_store(&app)
+        .map(|accounts| accounts.iter().map(PublicAccount::from).collect())
 }
 
 /// Retorna informações atualizadas de uma conta específica.
@@ -157,6 +127,57 @@ pub async fn get_account_info(
 
 // --- Helpers internos ---
 
+pub async fn add_account_from_token(
+    token: &str,
+    app: &tauri::AppHandle,
+) -> Result<PublicAccount, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("Token não pode ser vazio.".to_string());
+    }
+
+    let user_info = fetch_user_info(token)
+        .await
+        .map_err(|_| "Token inválido ou sem permissão. Verifique e tente novamente.".to_string())?;
+
+    if user_info.id.is_empty() {
+        return Err("A API do Discord retornou uma conta inválida.".to_string());
+    }
+
+    let token_encrypted =
+        storage::encrypt_token(token).map_err(|e| format!("Erro ao criptografar token: {e}"))?;
+    let mut accounts = load_accounts_from_store(app)?;
+
+    let account = if let Some(existing) = accounts
+        .iter_mut()
+        .find(|account| account.user_id == user_info.id)
+    {
+        // Reautenticar a mesma conta atualiza as credenciais sem criar duplicatas.
+        existing.token_encrypted = token_encrypted;
+        existing.username = user_info.username;
+        existing.discriminator = user_info.discriminator;
+        existing.avatar = user_info.avatar;
+        existing.clone()
+    } else {
+        let account = StoredAccount {
+            id: Uuid::new_v4().to_string(),
+            token_encrypted,
+            username: user_info.username,
+            discriminator: user_info.discriminator,
+            user_id: user_info.id,
+            avatar: user_info.avatar,
+            added_at: Utc::now(),
+            last_used: None,
+            color: account_color(accounts.len()),
+        };
+        accounts.push(account.clone());
+        account
+    };
+
+    save_accounts_to_store(app, &accounts)?;
+    Ok(PublicAccount::from(&account))
+}
+
 async fn fetch_user_info(token: &str) -> anyhow::Result<AccountInfoResponse> {
     let client = reqwest::Client::new();
     let mut headers = HeaderMap::new();
@@ -164,9 +185,7 @@ async fn fetch_user_info(token: &str) -> anyhow::Result<AccountInfoResponse> {
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
         "User-Agent",
-        HeaderValue::from_static(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        ),
+        HeaderValue::from_static(concat!("OrganicCord/", env!("CARGO_PKG_VERSION"))),
     );
 
     let response = client
@@ -192,4 +211,3 @@ async fn fetch_user_info(token: &str) -> anyhow::Result<AccountInfoResponse> {
         global_name: user["global_name"].as_str().map(|s| s.to_string()),
     })
 }
-

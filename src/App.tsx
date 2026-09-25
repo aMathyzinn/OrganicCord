@@ -7,20 +7,50 @@ import { useDiscordStore } from "@/stores/discordStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { useVoiceStore } from "@/stores/voiceStore";
+import { useGameActivityStore } from "@/stores/gameActivityStore";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { AddAccountModal } from "@/components/auth/AddAccountModal";
+import { WelcomeHub } from "@/components/auth/WelcomeHub";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { LoadingScreen } from "@/components/ui/LoadingScreen";
-import { OrganicMark } from "@/components/ui/OrganicMark";
 import { ToastContainer, toast } from "@/components/ui/Toast";
 import { UserProfileModal } from "@/components/profile/UserProfileModal";
 import { ExternalLinkModal } from "@/components/ui/ExternalLinkModal";
+import { IncomingCallWidget } from "@/components/voice/IncomingCallWidget";
 import * as Tooltip from "@radix-ui/react-tooltip";
+import type {
+  DiscordGatewayGuild,
+  DiscordChannel,
+  DiscordMember,
+  DiscordMessage,
+  DiscordPresence,
+  DiscordUser,
+  Reaction,
+} from "@/types";
+
+interface GatewayTypingEvent {
+  channel_id: string;
+  user_id: string;
+  timestamp: number;
+  member?: DiscordMember;
+}
+
+interface GatewayDispatchData extends Partial<DiscordMessage>, Partial<DiscordMember> {
+  channel_id?: string;
+  guild_id?: string;
+  message_id?: string;
+  user_id?: string;
+  ids?: string[];
+  emoji?: Reaction["emoji"];
+  user?: DiscordUser;
+  ringing?: string[];
+  region?: string;
+  voice_states?: Array<{ user_id: string; session_id?: string; channel_id?: string }>;
+}
 
 export default function App() {
-  const { accounts, loadAccounts, connectAll, loading, toggleStealth } = useAccountStore();
+  const { accounts, loadAccounts, connectAll, toggleStealth } = useAccountStore();
   const { setActiveAccount, focusedImage, setFocusedImage } = useNavigationStore();
-  const { prependMessage } = useDiscordStore();
   const [initializing, setInitializing] = useState(true);
   const [showAddAccount, setShowAddAccount] = useState(false);
 
@@ -29,9 +59,18 @@ export default function App() {
     initNotificationSystem();
   }, []);
 
+  // Os menus de contexto do Organic continuam sendo tratados pelos componentes.
+  // Este listener roda na janela, depois deles, apenas para impedir o menu nativo
+  // do WebView (inspecionar, recarregar e opções do navegador).
+  useEffect(() => {
+    const preventNativeContextMenu = (event: MouseEvent) => event.preventDefault();
+    window.addEventListener("contextmenu", preventNativeContextMenu);
+    return () => window.removeEventListener("contextmenu", preventNativeContextMenu);
+  }, []);
+
   // Gateway message listener
   useEffect(() => {
-    const unlistenMessagePromise = listen<{ account_id: string; message: any }>("gateway-message", (event) => {
+    const unlistenMessagePromise = listen<{ account_id: string; message: DiscordMessage }>("gateway-message", (event) => {
       const { account_id, message } = event.payload;
       if (message && message.channel_id) {
         useDiscordStore.getState().prependMessage(message.channel_id, message);
@@ -40,7 +79,7 @@ export default function App() {
         const activeAccountId = useNavigationStore.getState().activeAccountId;
         
         const account = useAccountStore.getState().accounts.find(a => a.id === account_id);
-        const hasMention = account && message.mentions?.some((m: any) => m.id === account.user_id);
+        const hasMention = account && message.mentions?.some((member) => member.id === account.user_id);
         const isFromMe = account && message.author?.id === account.user_id;
         
         const isFocused = document.hasFocus();
@@ -71,22 +110,34 @@ export default function App() {
 
     const unlistenSessionPromise = listen<{ account_id: string; session_id: string }>("gateway-session", (event) => {
       const { account_id, session_id } = event.payload;
-      console.log("gateway-session received for", account_id, session_id);
       useDiscordStore.getState().setSessionId(account_id, session_id);
     });
 
-    const unlistenGuildPromise = listen<{ account_id: string; guild: any }>("gateway-guild-create", (event) => {
+    const unlistenGuildPromise = listen<{ account_id: string; guild: DiscordGatewayGuild }>("gateway-guild-create", (event) => {
       const { account_id, guild } = event.payload;
-      console.log("gateway-guild-create received for", guild?.id, "emojis:", guild?.emojis?.length, "roles:", guild?.roles?.length);
+      if (guild) {
+        useDiscordStore.getState().hydrateGuildFromGateway(account_id, guild);
+      }
       if (guild && guild.emojis && guild.emojis.length > 0) {
         useDiscordStore.getState().addGuildEmojis(account_id, guild.id, guild.emojis);
       }
       if (guild && guild.roles && guild.roles.length > 0) {
         useDiscordStore.getState().addGuildRoles(account_id, guild.id, guild.roles);
       }
+      if (guild?.members) {
+        const currentUserId = useAccountStore
+          .getState()
+          .accounts.find((account) => account.id === account_id)?.user_id;
+        const currentMember = guild.members.find(
+          (member) => member?.user?.id === currentUserId
+        );
+        if (currentMember) {
+          useDiscordStore.getState().addGuildMember(account_id, guild.id, currentMember);
+        }
+      }
     });
 
-    const unlistenPresencePromise = listen<{ account_id: string; presence: any }>("gateway-presence", (event) => {
+    const unlistenPresencePromise = listen<{ account_id: string; presence: DiscordPresence }>("gateway-presence", (event) => {
       const { account_id, presence } = event.payload;
       if (presence) {
         useDiscordStore.getState().updatePresence(account_id, presence);
@@ -95,22 +146,199 @@ export default function App() {
 
     const unlistenRelationshipPromise = listen<{ account_id: string }>("gateway-relationship", (event) => {
       const { account_id } = event.payload;
-      console.log("gateway-relationship received for", account_id);
       useDiscordStore.getState().fetchRelationships(account_id);
     });
 
-    const unlistenPresencesPromise = listen<{ account_id: string; presences: any[] }>("gateway-presences", (event) => {
+    const unlistenPresencesPromise = listen<{ account_id: string; presences: DiscordPresence[] }>("gateway-presences", (event) => {
       const { account_id, presences } = event.payload;
-      console.log("gateway-presences received", presences?.length);
       if (presences && Array.isArray(presences)) {
         useDiscordStore.getState().updatePresences(account_id, presences);
       }
     });
 
-    const unlistenTypingPromise = listen<{ account_id: string; typing: any }>("gateway-typing-start", (event) => {
+    const unlistenTypingPromise = listen<{ account_id: string; typing: GatewayTypingEvent }>("gateway-typing-start", (event) => {
       const { typing } = event.payload;
       if (typing && typing.channel_id && typing.user_id) {
         useDiscordStore.getState().addTypingUser(typing.channel_id, typing.user_id, typing.timestamp * 1000, typing.member);
+      }
+    });
+
+    const unlistenDispatchPromise = listen<{ account_id: string; event_type: string; data: GatewayDispatchData }>("gateway-dispatch", (event) => {
+      const { account_id, event_type: eventType, data } = event.payload;
+      const store = useDiscordStore.getState();
+      const currentUserId = useAccountStore
+        .getState()
+        .accounts.find((account) => account.id === account_id)?.user_id;
+
+      switch (eventType) {
+        case "MESSAGE_UPDATE":
+          if (data.channel_id && data.id) {
+            store.updateMessageFromGateway(data.channel_id, { ...data, id: data.id });
+          }
+          break;
+        case "MESSAGE_DELETE":
+          if (data?.channel_id && data?.id) store.removeMessageFromGateway(data.channel_id, data.id);
+          break;
+        case "MESSAGE_DELETE_BULK":
+          if (data.channel_id && Array.isArray(data.ids)) {
+            const channelId = data.channel_id;
+            data.ids.forEach((id) => store.removeMessageFromGateway(channelId, id));
+          }
+          break;
+        case "MESSAGE_REACTION_ADD":
+        case "MESSAGE_REACTION_REMOVE":
+          if (data?.channel_id && data?.message_id && data?.emoji) {
+            store.applyGatewayReaction(
+              data.channel_id,
+              data.message_id,
+              { id: data.emoji.id ?? null, name: data.emoji.name ?? "" },
+              eventType === "MESSAGE_REACTION_ADD",
+              data.user_id === currentUserId
+            );
+          }
+          break;
+        case "MESSAGE_REACTION_REMOVE_ALL": {
+          if (!data.channel_id || !data.message_id) break;
+          const message = store.cache.messages[data.channel_id]?.find((item) => item.id === data.message_id);
+          if (message) {
+            store.updateMessageFromGateway(data.channel_id, { id: message.id, reactions: [] });
+          }
+          break;
+        }
+        case "CHANNEL_CREATE":
+        case "CHANNEL_UPDATE":
+        case "THREAD_CREATE":
+        case "THREAD_UPDATE": {
+          const raw = data as GatewayDispatchData & Partial<DiscordChannel> & { type?: number };
+          const channelType = Number(raw.channel_type ?? raw.type);
+          if (raw.guild_id && raw.id && Number.isFinite(channelType)) {
+            store.applyGuildChannelEvent(account_id, raw.guild_id, {
+              id: raw.id,
+              name: typeof raw.name === "string" ? raw.name : null,
+              channel_type: channelType,
+              position: typeof raw.position === "number" ? raw.position : null,
+              parent_id: typeof raw.parent_id === "string" ? raw.parent_id : null,
+              topic: typeof raw.topic === "string" ? raw.topic : null,
+              nsfw: typeof raw.nsfw === "boolean" ? raw.nsfw : null,
+              available_tags: raw.available_tags,
+              last_message_id: raw.last_message_id,
+              permission_overwrites: raw.permission_overwrites,
+            } as DiscordChannel, false);
+          }
+          break;
+        }
+        case "CHANNEL_DELETE":
+        case "THREAD_DELETE": {
+          if (data.guild_id && data.id) {
+            store.applyGuildChannelEvent(account_id, data.guild_id, {
+              id: data.id,
+              name: null,
+              channel_type: 0,
+              position: null,
+              parent_id: null,
+              topic: null,
+              nsfw: null,
+            } as DiscordChannel, true);
+          }
+          break;
+        }
+        case "GUILD_UPDATE":
+        case "GUILD_DELETE":
+          void store.fetchGuilds(account_id);
+          break;
+        case "GUILD_MEMBER_UPDATE":
+          if (data.guild_id && data.user?.id === currentUserId) {
+            const previous = store.cache.guildMembers[account_id]?.[data.guild_id];
+            store.addGuildMember(account_id, data.guild_id, {
+              ...previous,
+              ...data,
+              roles: data.roles ?? previous?.roles ?? [],
+              joined_at: data.joined_at ?? previous?.joined_at ?? "",
+              deaf: data.deaf ?? previous?.deaf ?? false,
+              mute: data.mute ?? previous?.mute ?? false,
+            });
+          }
+          break;
+        case "CALL_CREATE": {
+          if (data.channel_id) {
+            const ringing = Array.isArray(data.ringing) ? (data.ringing as string[]) : [];
+            const isRingingForMe = ringing.includes(currentUserId ?? "");
+            const dm = store.cache.dms[account_id]?.find((d) => d.id === data.channel_id);
+            const callerUser = dm?.recipients?.find((u) => u.id !== currentUserId) ?? dm?.recipients?.[0];
+            const voiceStates = Array.isArray(data.voice_states) ? data.voice_states : [];
+            const callerId = callerUser?.id ?? voiceStates.find((vs) => vs.user_id !== currentUserId)?.user_id ?? "";
+
+            // Se está tocando para mim ou a chamada partiu de outro usuário na DM
+            if ((isRingingForMe || (callerUser && callerUser.id !== currentUserId)) && callerId !== currentUserId) {
+              useVoiceStore.getState().setIncomingCall({
+                accountId: account_id,
+                channelId: data.channel_id,
+                callerId,
+                callerUser,
+                region: typeof data.region === "string" ? data.region : undefined,
+                timestamp: Date.now(),
+              });
+            }
+
+            // Sincroniza estado da chamada ativa caso seja o canal atual
+            const activeCall = useVoiceStore.getState();
+            if (activeCall.channelId === data.channel_id) {
+              activeCall.handleCallUpdate(data.channel_id, voiceStates, ringing);
+            }
+          }
+          break;
+        }
+        case "CALL_UPDATE": {
+          if (data.channel_id) {
+            const incoming = useVoiceStore.getState().incomingCall;
+            const ringing = Array.isArray(data.ringing) ? (data.ringing as string[]) : [];
+            if (incoming && incoming.channelId === data.channel_id) {
+              if (currentUserId && !ringing.includes(currentUserId)) {
+                useVoiceStore.getState().setIncomingCall(null);
+              }
+            }
+
+            // Sincroniza participantes e toque da chamada ativa
+            const activeCall = useVoiceStore.getState();
+            if (activeCall.channelId === data.channel_id) {
+              const voiceStates = Array.isArray(data.voice_states) ? data.voice_states : [];
+              activeCall.handleCallUpdate(data.channel_id, voiceStates, ringing);
+            }
+          }
+          break;
+        }
+        case "CALL_DELETE": {
+          if (data.channel_id) {
+            const incoming = useVoiceStore.getState().incomingCall;
+            if (incoming && incoming.channelId === data.channel_id) {
+              useVoiceStore.getState().setIncomingCall(null);
+            }
+
+            // Encerra chamada ativa caso o outro lado tenha recusado ou desligado
+            const activeCall = useVoiceStore.getState();
+            if (activeCall.channelId === data.channel_id) {
+              activeCall.handleCallDelete(data.channel_id);
+            }
+          }
+          break;
+        }
+      }
+    });
+
+    const unlistenGatewayStatusPromise = listen<{
+      account_id: string;
+      status: "connected" | "reconnecting" | "error" | "disconnected";
+      message?: string;
+    }>("gateway-status", (event) => {
+      const { account_id, status, message } = event.payload;
+      if (status === "connected") {
+        useAccountStore.getState().setSessionStatus(account_id, "Connected");
+      } else if (status === "reconnecting") {
+        useAccountStore.getState().setSessionStatus(account_id, "Connecting");
+      } else if (status === "error") {
+        useAccountStore.getState().setSessionStatus(account_id, { Error: message ?? "Gateway indisponível" });
+      } else {
+        useAccountStore.getState().setSessionStatus(account_id, "Disconnected");
       }
     });
 
@@ -123,15 +351,23 @@ export default function App() {
         unlistenRelationshipPromise.then((f) => f()),
         unlistenPresencesPromise.then((f) => f()),
         unlistenTypingPromise.then((f) => f()),
+        unlistenDispatchPromise.then((f) => f()),
+        unlistenGatewayStatusPromise.then((f) => f()),
       ]);
     };
   }, []);
 
   useEffect(() => {
     (async () => {
-      await useSettingsStore.getState().loadSettings();
-      await loadAccounts();
-      setInitializing(false);
+      try {
+        await useSettingsStore.getState().loadSettings();
+        await loadAccounts();
+      } catch (error) {
+        console.error("[startup] Falha ao carregar o estado local:", error);
+        toast.error("Não foi possível carregar todas as configurações. Os padrões foram restaurados.");
+      } finally {
+        setInitializing(false);
+      }
     })();
   }, []);
 
@@ -143,12 +379,24 @@ export default function App() {
     }
   }, [initializing]);
 
-  // Se não há contas, exibe tela de adição obrigatória
+  // The detector itself runs in Rust. Polling keeps the browser layer small;
+  // Rich Presence is published to whichever account is open in Discord Desktop.
   useEffect(() => {
-    if (!initializing && accounts.length === 0) {
-      setShowAddAccount(true);
-    }
-  }, [initializing, accounts.length]);
+    if (initializing) return;
+    let disposed = false;
+    const refreshGameActivity = async () => {
+      if (!disposed) {
+        await useGameActivityStore.getState().refreshAndSync();
+      }
+    };
+    void refreshGameActivity();
+    const timer = window.setInterval(() => void refreshGameActivity(), 3_500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      void useGameActivityStore.getState().clearPublishedActivity();
+    };
+  }, [initializing]);
 
   // Keybinds Globais
   useEffect(() => {
@@ -219,18 +467,13 @@ export default function App() {
         <TitleBar />
       <div style={{ flex: 1, overflow: "hidden" }}>
         {accounts.length === 0 ? (
-          <div
-            style={{
-              height: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "var(--bg-primary)",
-              position: "relative",
-              overflow: "hidden",
-            }}
-          >
-            <WelcomeScreen onAddAccount={() => setShowAddAccount(true)} />
+          <div style={{ height: "100%", overflow: "hidden" }}>
+            <WelcomeHub
+              onSuccess={(account) => {
+                setShowAddAccount(false);
+                setActiveAccount(account.id);
+              }}
+            />
           </div>
         ) : (
           <MainLayout onAddAccount={() => setShowAddAccount(true)} />
@@ -303,213 +546,10 @@ export default function App() {
       <UserProfileModal />
       <ToastContainer />
       <ExternalLinkModal />
+      <IncomingCallWidget />
       </div>
     </Tooltip.Provider>
   );
 }
 
-function WelcomeScreen({ onAddAccount }: { onAddAccount: () => void }) {
-  return (
-    <div
-      style={{
-        position: "relative",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "100%",
-        height: "100%",
-      }}
-    >
-      {/* Background Glow Blobs */}
-      <div 
-        style={{
-          position: "absolute",
-          width: 400,
-          height: 400,
-          background: "var(--brand-500)",
-          borderRadius: "50%",
-          filter: "blur(140px)",
-          opacity: 0.15,
-          top: "10%",
-          left: "25%",
-          pointerEvents: "none",
-          animation: "pulse 6s infinite alternate ease-in-out",
-        }}
-      />
-      <div 
-        style={{
-          position: "absolute",
-          width: 350,
-          height: 350,
-          background: "var(--status-online)",
-          borderRadius: "50%",
-          filter: "blur(140px)",
-          opacity: 0.12,
-          bottom: "10%",
-          right: "25%",
-          pointerEvents: "none",
-          animation: "pulse 8s infinite alternate-reverse ease-in-out",
-        }}
-      />
-
-      {/* Glass Card */}
-      <div
-        style={{
-          textAlign: "center",
-          animation: "fadeIn 600ms cubic-bezier(0.16, 1, 0.3, 1)",
-          maxWidth: 540,
-          width: "100%",
-          padding: "56px 48px",
-          background: "rgba(17, 18, 20, 0.65)",
-          backdropFilter: "blur(24px)",
-          WebkitBackdropFilter: "blur(24px)",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
-          borderRadius: "32px",
-          boxShadow: "0 24px 64px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05)",
-          position: "relative",
-          zIndex: 1,
-        }}
-      >
-        {/* Brand mark */}
-        <div
-          style={{
-            width: 96,
-            height: 96,
-            borderRadius: "28px",
-            background: "linear-gradient(135deg, rgba(35,165,90,0.15) 0%, rgba(88,101,242,0.15) 100%)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            boxShadow: "0 12px 32px rgba(0,0,0,0.3), inset 0 2px 0 rgba(255,255,255,0.05)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            margin: "0 auto 32px",
-            position: "relative",
-          }}
-        >
-          {/* Inner glow */}
-          <div style={{
-            position: "absolute",
-            inset: 0,
-            borderRadius: "28px",
-            boxShadow: "inset 0 0 20px rgba(35,165,90,0.1)",
-            pointerEvents: "none"
-          }} />
-          <OrganicMark size={48} color="var(--status-online)" />
-        </div>
-
-        <h1
-          style={{
-            fontSize: 36,
-            fontWeight: 800,
-            color: "var(--text-normal)",
-            marginBottom: 16,
-            letterSpacing: "-0.03em",
-            lineHeight: 1.1,
-          }}
-        >
-          Bem-vindo ao{" "}
-          <span style={{ color: "var(--brand-500)" }}>
-            OrganicCord
-          </span>
-        </h1>
-        <p
-          style={{
-            color: "var(--text-muted)",
-            marginBottom: 40,
-            lineHeight: 1.6,
-            fontSize: 16,
-            padding: "0 16px",
-          }}
-        >
-          O cliente Discord alternativo projetado para máxima produtividade.
-          Múltiplas contas simultâneas, inteligência artificial integrada e privacidade por padrão.
-        </p>
-
-        {/* Feature pills */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: 12,
-            flexWrap: "wrap",
-            marginBottom: 44,
-          }}
-        >
-          {[
-            { label: "Multi-conta", color: "var(--brand-500)", bg: "rgba(88,101,242,0.12)" },
-            { label: "IA integrada", color: "var(--status-online)", bg: "rgba(35,165,90,0.12)" },
-            { label: "Privacidade", color: "var(--text-warning)", bg: "rgba(240,178,50,0.12)" },
-          ].map((f) => (
-            <span
-              key={f.label}
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: f.color,
-                background: f.bg,
-                border: "1px solid rgba(255,255,255,0.06)",
-                padding: "6px 16px",
-                borderRadius: "var(--radius-full)",
-                letterSpacing: "0.01em",
-                boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
-              }}
-            >
-              {f.label}
-            </span>
-          ))}
-        </div>
-
-        <button
-          onClick={onAddAccount}
-          style={{
-            background: "linear-gradient(135deg, var(--brand-500) 0%, var(--brand-600) 100%)",
-            color: "#fff",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: "16px",
-            padding: "16px 40px",
-            fontSize: 17,
-            fontWeight: 700,
-            cursor: "pointer",
-            transition: "all 200ms cubic-bezier(0.16, 1, 0.3, 1)",
-            letterSpacing: "0.01em",
-            boxShadow: "0 8px 24px rgba(88,101,242,0.25), inset 0 1px 0 rgba(255,255,255,0.2)",
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = "translateY(-2px)";
-            e.currentTarget.style.boxShadow = "0 12px 28px rgba(88,101,242,0.35), inset 0 1px 0 rgba(255,255,255,0.2)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = "translateY(0)";
-            e.currentTarget.style.boxShadow = "0 8px 24px rgba(88,101,242,0.25), inset 0 1px 0 rgba(255,255,255,0.2)";
-          }}
-          onMouseDown={(e) => {
-            e.currentTarget.style.transform = "translateY(1px)";
-            e.currentTarget.style.boxShadow = "0 4px 12px rgba(88,101,242,0.2), inset 0 1px 0 rgba(255,255,255,0.1)";
-          }}
-        >
-          <span>Adicionar Conta</span>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-        </button>
-
-        <p
-          style={{
-            fontSize: 13,
-            color: "var(--text-muted)",
-            marginTop: 24,
-            opacity: 0.6,
-          }}
-        >
-          Adicione sua primeira conta Discord para começar a usar
-        </p>
-      </div>
-    </div>
-  );
-}
+// WelcomeScreen removido — substituído por WelcomeHub (src/components/auth/WelcomeHub.tsx)

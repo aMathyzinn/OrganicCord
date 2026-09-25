@@ -2,19 +2,19 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { useNavigationStore } from "@/stores/navigationStore";
-import { useAiStore, makeDefaultConfig } from "@/stores/aiStore";
-import { useAiConversationStore } from "@/stores/aiConversationStore";
 import { MessageList } from "./MessageList";
 import { MessageInput, AttachmentData } from "./MessageInput";
 import { TypingIndicator } from "./TypingIndicator";
-import { ChatAiButtons } from "@/components/ai/ChatAiButtons";
-import { AiConfigModal } from "@/components/ai/AiConfigModal";
-import { AiConversationModal } from "@/components/ai/AiConversationModal";
 import { PinnedMessagesPopover } from "./PinnedMessagesPopover";
 import { SearchResultsSidebar } from "./SearchResultsSidebar";
 import type { DiscordMessage, ChannelType, DiscordChannel } from "@/types";
-import { Volume2, Drama, Megaphone, MessagesSquare, Bot, MessagesSquare as Conversations, Settings, Hash, ArrowLeft, Phone, Video, Pin, Users, Search, Ban } from "lucide-react";
+import { Volume2, Drama, Megaphone, MessagesSquare, Hash, ArrowLeft, Phone, Video, Search, Ban, Lock } from "lucide-react";
 import { useVoiceStore } from "@/stores/voiceStore";
+import { ChatDropOverlay } from "./ChatDropOverlay";
+import { getChannelPermissions } from "@/lib/permissions";
+import { toast } from "@/components/ui/Toast";
+import { AppConfirmDialog } from "@/components/ui/AppDialog";
+import { getMessages } from "@/lib/tauri";
 
 function getHeaderIcon(type: ChannelType): React.ReactNode {
   const n = Number(type);
@@ -37,9 +37,11 @@ export function ChatArea({ channelId, accountId }: Props) {
   const { accounts } = useAccountStore();
   const { activeGuildId } = useNavigationStore();
   const [replyingTo, setReplyingTo] = useState<DiscordMessage | null>(null);
-  const [showAiModal, setShowAiModal] = useState(false);
-  const [showConvModal, setShowConvModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<AttachmentData | null>(null);
+  const [unblockTarget, setUnblockTarget] = useState<{ id: string; name: string } | null>(null);
+  const dragCounterRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevChannelRef = useRef<string | null>(null);
 
@@ -47,9 +49,80 @@ export function ChatArea({ channelId, accountId }: Props) {
   const isLoading = loading.messages[channelId];
   const account = accounts.find((a) => a.id === accountId);
 
+  const guilds = cache.guilds[accountId] ?? [];
+  const channels = activeGuildId ? (cache.channels[accountId]?.[activeGuildId] ?? []) : [];
+  const channel = channels.find((c) => c.id === channelId);
+  const threads = activeGuildId ? (cache.threads[activeGuildId] ?? []) : [];
+  const isThread = Boolean(!channel && activeGuildId && threads.some((t: DiscordChannel) => t.id === channelId));
+  const threadObj = isThread ? threads.find((t: DiscordChannel) => t.id === channelId) : null;
+  const targetName = channel?.name || threadObj?.name || "canal";
+  const permissionChannel = isThread
+    ? channels.find((item) => item.id === threadObj?.parent_id)
+    : channel;
+  const currentMember = activeGuildId
+    ? cache.guildMembers[accountId]?.[activeGuildId]
+    : undefined;
+
+  const perms = getChannelPermissions(activeGuildId, guilds, isThread, {
+    channel: permissionChannel,
+    memberRoleIds: currentMember?.roles,
+    currentUserId: account?.user_id,
+  });
+  const canView = perms.canView;
+  const canSend = perms.canSend;
+  const canUpload = perms.canAttach;
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = canUpload ? "copy" : "none";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+
+    if (!canUpload) {
+      toast.error("Você não tem permissão para enviar arquivos neste canal.");
+      return;
+    }
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      if (file.size > 25 * 1024 * 1024) {
+        toast.error("Arquivo maior que 25MB. Por favor use arquivos menores.");
+        return;
+      }
+      setPendingAttachment({ type: "file", file });
+      toast.success(`Arquivo "${file.name}" pronto para envio!`);
+    }
+  };
+
   // Carrega mensagens quando o canal muda (sempre busca fresh ao trocar de canal)
   useEffect(() => {
     prevChannelRef.current = channelId;
+    setPendingAttachment(null);
     fetchMessages(accountId, channelId).then(() => {
       const msgs = useDiscordStore.getState().cache.messages[channelId];
       const newestReal = msgs?.find(m => !m.id.startsWith("local-"));
@@ -69,9 +142,7 @@ export function ChatArea({ channelId, accountId }: Props) {
       const newestReal = existing?.find((m) => !m.id.startsWith("local-"));
       if (!newestReal) return;
       try {
-        const fresh = await import("@/lib/tauri").then((m) =>
-          m.getMessages(accountId, channelId, undefined, newestReal.id)
-        );
+        const fresh = await getMessages(accountId, channelId, undefined, newestReal.id);
         if (fresh.length === 0) return;
         useDiscordStore.setState((s) => {
           const cur = s.cache.messages[channelId] ?? [];
@@ -112,28 +183,29 @@ export function ChatArea({ channelId, accountId }: Props) {
 
   const handleSend = useCallback(async (content: string, attachment?: AttachmentData) => {
     if (!accountId || !channelId) return;
+    const finalAttachment = attachment ?? pendingAttachment;
     try {
-      if (attachment) {
-        if (attachment.type === "file") {
-          const buffer = await attachment.file.arrayBuffer();
+      if (finalAttachment) {
+        if (finalAttachment.type === "file") {
+          const buffer = await finalAttachment.file.arrayBuffer();
           const data = new Uint8Array(buffer);
           await useDiscordStore.getState().sendMessageWithAttachment(
             accountId,
             channelId,
             content,
             replyingTo?.id,
-            attachment.file.name,
+            finalAttachment.file.name,
             undefined,
             data
           );
-        } else if (attachment.type === "path") {
+        } else if (finalAttachment.type === "handle") {
           await useDiscordStore.getState().sendMessageWithAttachment(
             accountId,
             channelId,
             content,
             replyingTo?.id,
-            attachment.name,
-            attachment.path,
+            finalAttachment.name,
+            finalAttachment.handle,
             undefined
           );
         }
@@ -141,30 +213,78 @@ export function ChatArea({ channelId, accountId }: Props) {
         await sendMessage(accountId, channelId, content, replyingTo?.id);
       }
       setReplyingTo(null);
+      setPendingAttachment(null);
     } catch (e) {
       console.error("Failed to send message:", e);
     }
-  }, [accountId, channelId, replyingTo, sendMessage]);
+  }, [accountId, channelId, replyingTo, sendMessage, pendingAttachment]);
 
   const handleLoadMore = useCallback(() => {
     fetchMoreMessages(accountId, channelId);
   }, [accountId, channelId]);
 
+  if (!canView) {
+    return (
+      <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg-primary)" }}>
+        <ChannelHeader
+          channelId={channelId}
+          accountId={accountId}
+          onSearch={(q) => setSearchQuery(q)}
+        />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 32, gap: 16, textAlign: "center" }}>
+          <div
+            style={{
+              width: 68,
+              height: 68,
+              borderRadius: 22,
+              background: "rgba(242, 63, 67, 0.12)",
+              border: "1px solid rgba(242, 63, 67, 0.25)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: "0 8px 24px rgba(242, 63, 67, 0.15)",
+            }}
+          >
+            <Lock size={34} color="var(--status-dnd)" />
+          </div>
+          <div style={{ maxWidth: 380 }}>
+            <h3 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-normal)", margin: "0 0 8px" }}>
+              Canal Privado
+            </h3>
+            <p style={{ fontSize: 14, color: "var(--text-muted)", margin: 0, lineHeight: 1.55 }}>
+              Você não possui a permissão necessária (<strong>VIEW_CHANNEL</strong>) para visualizar as mensagens de <strong style={{ color: "#fff" }}>#{targetName}</strong>.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
+    <>
     <div
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
       style={{
         height: "100%",
         display: "flex",
         flexDirection: "column",
         background: "var(--bg-primary)",
+        position: "relative",
       }}
     >
+      <ChatDropOverlay
+        isDragging={isDragging}
+        canUpload={canUpload}
+        targetName={targetName}
+      />
+
       {/* Header do canal */}
       <ChannelHeader
         channelId={channelId}
         accountId={accountId}
-        onOpenAi={() => setShowAiModal(true)}
-        onOpenConversations={() => setShowConvModal(true)}
         onSearch={(q) => setSearchQuery(q)}
       />
 
@@ -179,13 +299,13 @@ export function ChatArea({ channelId, accountId }: Props) {
               onLoadMore={handleLoadMore}
               onReply={setReplyingTo}
               onDelete={(messageId) => deleteMessage(accountId, channelId, messageId)}
-              channels={cache.channels[activeGuildId ?? ""] ?? []}
+              channels={activeGuildId ? (cache.channels[accountId]?.[activeGuildId] ?? []) : []}
             />
           </div>
 
           <TypingIndicator channelId={channelId} />
 
-          {/* Input ou Banner de Usuário Bloqueado */}
+          {/* Input ou Banners de Bloqueio / Leitura Apenas */}
           {(() => {
             const dms = cache.dms[accountId] ?? [];
             const dmObj = dms.find((d) => d.id === channelId);
@@ -214,12 +334,10 @@ export function ChatArea({ channelId, accountId }: Props) {
                     <span>Você não pode enviar mensagens para um usuário que bloqueou.</span>
                   </div>
                   <button
-                    onClick={async () => {
-                      if (window.confirm(`Tem certeza que deseja desbloquear ${dmRecipient?.global_name || dmRecipient?.username}?`)) {
-                        await useDiscordStore.getState().unblockUser(accountId, dmRecipient!.id);
-                        import("@/components/ui/Toast").then(m => m.toast.success("Usuário desbloqueado!"));
-                      }
-                    }}
+                    onClick={() => dmRecipient && setUnblockTarget({
+                      id: dmRecipient.id,
+                      name: dmRecipient.global_name || dmRecipient.username,
+                    })}
                     style={{
                       background: "var(--brand-500)",
                       color: "#ffffff",
@@ -237,6 +355,47 @@ export function ChatArea({ channelId, accountId }: Props) {
               );
             }
 
+            if (!canSend) {
+              return (
+                <div
+                  style={{
+                    background: "var(--bg-secondary)",
+                    borderRadius: "var(--radius-md)",
+                    margin: "0 16px 24px",
+                    padding: "14px 20px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 14,
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      background: "rgba(242, 63, 67, 0.12)",
+                      border: "1px solid rgba(242, 63, 67, 0.25)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Lock size={18} color="var(--status-dnd)" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-normal)" }}>
+                      Você não tem permissão para enviar mensagens neste canal.
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                      Este canal é somente para leitura ou você não possui a permissão de envio (SEND_MESSAGES).
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <MessageInput
                 channelId={channelId}
@@ -244,6 +403,8 @@ export function ChatArea({ channelId, accountId }: Props) {
                 onCancelReply={() => setReplyingTo(null)}
                 onSend={handleSend}
                 accountColor={account?.color}
+                externalAttachment={pendingAttachment}
+                canAttach={canUpload}
               />
             );
           })()}
@@ -261,31 +422,37 @@ export function ChatArea({ channelId, accountId }: Props) {
         )}
       </div>
 
-      {showAiModal && <AiConfigModal onClose={() => setShowAiModal(false)} />}
-      {showConvModal && <AiConversationModal onClose={() => setShowConvModal(false)} />}
     </div>
+    <AppConfirmDialog
+      open={unblockTarget !== null}
+      onOpenChange={(open) => !open && setUnblockTarget(null)}
+      title="Desbloquear usuário?"
+      description={unblockTarget ? `Você voltará a receber mensagens de ${unblockTarget.name}.` : ""}
+      confirmLabel="Desbloquear"
+      onConfirm={async () => {
+        if (!unblockTarget) return;
+        await useDiscordStore.getState().unblockUser(accountId, unblockTarget.id);
+        toast.success("Usuário desbloqueado!");
+      }}
+    />
+    </>
   );
 }
 
 function ChannelHeader({
   channelId,
   accountId,
-  onOpenAi,
-  onOpenConversations,
   onSearch,
 }: {
   channelId: string;
   accountId: string;
-  onOpenAi: () => void;
-  onOpenConversations: () => void;
   onSearch: (q: string) => void;
 }) {
-  const { cache, deleteMessage } = useDiscordStore();
+  const { cache } = useDiscordStore();
   const { activeGuildId } = useNavigationStore();
-  const { stealthMode } = useAccountStore();
   const { joinCall, leaveCall, isConnecting, isConnected } = useVoiceStore();
 
-  const channels = activeGuildId ? (cache.channels[activeGuildId] ?? []) : [];
+  const channels = activeGuildId ? (cache.channels[accountId]?.[activeGuildId] ?? []) : [];
   const channel = channels.find((c) => c.id === channelId);
   
   const isThread = !channel && activeGuildId && cache.threads[activeGuildId]?.some(t => t.id === channelId);
@@ -443,15 +610,6 @@ function ChannelHeader({
           <Search size={14} color="var(--text-muted)" />
         </div>
 
-        {!stealthMode && (
-          <ChatAiButtons 
-            accountId={accountId} 
-            channelId={channelId} 
-            activeGuildId={activeGuildId} 
-            onOpenAi={onOpenAi} 
-            onOpenConversations={onOpenConversations} 
-          />
-        )}
       </div>
     </div>
   );

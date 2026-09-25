@@ -1,8 +1,9 @@
 use tauri::State;
+use zeroize::Zeroizing;
 
-use crate::gateway::{GatewayManager, PresenceStatus, CustomActivity};
-use crate::storage;
 use crate::commands::account::load_accounts_from_store;
+use crate::gateway::{CustomActivity, GameActivity, GatewayManager, PresenceStatus};
+use crate::storage;
 
 /// Connects the Discord gateway for a given account and sets its initial status.
 /// Must be called after connect_account succeeds.
@@ -60,13 +61,38 @@ pub async fn gateway_set_custom_activity(
     gateway.set_custom_activity(&account_id, activity).await
 }
 
+/// Publishes the currently detected game without replacing the user's custom status.
+#[tauri::command]
+pub async fn gateway_set_game_activity(
+    account_id: String,
+    name: Option<String>,
+    started_at: Option<i64>,
+    gateway: State<'_, GatewayManager>,
+) -> Result<(), String> {
+    let activity = match (name, started_at) {
+        (Some(name), Some(started_at))
+            if !name.trim().is_empty() && name.chars().count() <= 128 && started_at > 0 =>
+        {
+            Some(GameActivity {
+                name: name.trim().to_string(),
+                started_at,
+            })
+        }
+        (None, None) => None,
+        _ => return Err("Atividade de jogo inválida.".to_string()),
+    };
+    gateway.set_game_activity(&account_id, activity).await
+}
+
 /// Returns the current presence status for an account.
 #[tauri::command]
 pub fn gateway_get_status(
     account_id: String,
     gateway: State<'_, GatewayManager>,
 ) -> Option<String> {
-    gateway.get_status(&account_id).map(|s| s.as_str().to_string())
+    gateway
+        .get_status(&account_id)
+        .map(|s| s.as_str().to_string())
 }
 
 fn parse_status(s: &str) -> PresenceStatus {
@@ -78,7 +104,7 @@ fn parse_status(s: &str) -> PresenceStatus {
     }
 }
 
-fn get_token(account_id: &str, app: &tauri::AppHandle) -> Result<String, String> {
+fn get_token(account_id: &str, app: &tauri::AppHandle) -> Result<Zeroizing<String>, String> {
     let accounts = load_accounts_from_store(app)?;
     let account = accounts
         .iter()
@@ -86,5 +112,6 @@ fn get_token(account_id: &str, app: &tauri::AppHandle) -> Result<String, String>
         .ok_or("Conta não encontrada.")?;
 
     storage::decrypt_token(&account.token_encrypted)
+        .map(Zeroizing::new)
         .map_err(|e| format!("Erro ao descriptografar token: {}", e))
 }

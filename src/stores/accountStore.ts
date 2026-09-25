@@ -29,6 +29,7 @@ interface AccountState {
 
   loadAccounts: () => Promise<void>;
   addAccount: (token: string) => Promise<StoredAccount>;
+  acceptAccount: (account: StoredAccount) => Promise<StoredAccount>;
   removeAccount: (accountId: string) => Promise<void>;
   connectAccount: (accountId: string) => Promise<void>;
   disconnectAccount: (accountId: string) => Promise<void>;
@@ -60,7 +61,11 @@ export const useAccountStore = create<AccountState>()(
         set((s) => { s.loading = true; s.error = null; });
         try {
           const accounts = await api.listAccounts();
-          set((s) => { s.accounts = accounts; s.loading = false; });
+
+          set((s) => {
+            s.accounts = accounts;
+            s.loading = false;
+          });
         } catch (e) {
           set((s) => { s.error = String(e); s.loading = false; });
         }
@@ -70,13 +75,23 @@ export const useAccountStore = create<AccountState>()(
         set((s) => { s.loading = true; s.error = null; });
         try {
           const result = await api.addAccount(token);
-          set((s) => { s.accounts.push(result.account); s.loading = false; });
-          await get().connectAccount(result.account.id);
-          return result.account;
+          return await get().acceptAccount(result.account);
         } catch (e) {
           set((s) => { s.error = String(e); s.loading = false; });
           throw e;
         }
+      },
+
+      acceptAccount: async (account: StoredAccount) => {
+        set((s) => {
+          const existing = s.accounts.find((item) => item.id === account.id);
+          if (existing) Object.assign(existing, account);
+          else s.accounts.push(account);
+          s.loading = false;
+          s.error = null;
+        });
+        await get().connectAccount(account.id);
+        return account;
       },
 
       removeAccount: async (accountId: string) => {

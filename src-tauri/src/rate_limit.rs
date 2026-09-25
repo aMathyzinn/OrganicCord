@@ -17,6 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
+use crate::http_client::{backoff_ms, RetryConfig};
+
 /// A per-bucket rate limit state.
 #[derive(Debug)]
 struct BucketState {
@@ -90,6 +92,13 @@ impl BucketState {
 
     /// Update from Discord response headers.
     fn update_from_headers(&mut self, headers: &reqwest::header::HeaderMap) {
+        if let Some(limit) = headers
+            .get("x-ratelimit-limit")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            self.limit = limit.max(1);
+        }
         if let Some(remaining) = headers
             .get("x-ratelimit-remaining")
             .and_then(|v| v.to_str().ok())
@@ -107,21 +116,28 @@ impl BucketState {
     }
 }
 
-/// Categorizes a URL into a rate limit bucket key.
-/// For Discord, the "bucket" is typically per-channel or per-guild per route.
-fn bucket_key(route: &str, resource_id: &str) -> String {
-    format!("{}:{}", route, resource_id)
+#[derive(Debug)]
+struct RateLimitState {
+    buckets: HashMap<String, BucketState>,
+    route_to_bucket: HashMap<String, String>,
+    global: BucketState,
+    global_retry_after: Option<Instant>,
 }
 
 /// Global rate limiter — singleton managed by Tauri state.
 pub struct RateLimiter {
-    buckets: Arc<Mutex<HashMap<String, BucketState>>>,
+    state: Arc<Mutex<RateLimitState>>,
 }
 
 impl RateLimiter {
     pub fn new() -> Self {
         Self {
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            state: Arc::new(Mutex::new(RateLimitState {
+                buckets: HashMap::new(),
+                route_to_bucket: HashMap::new(),
+                global: BucketState::new(50, 1),
+                global_retry_after: None,
+            })),
         }
     }
 
@@ -130,51 +146,140 @@ impl RateLimiter {
     pub async fn acquire(&self, bucket: &str, limit: u32, window_secs: u64) {
         loop {
             let wait = {
-                let mut buckets = self.buckets.lock().await;
-                let state = buckets
-                    .entry(bucket.to_string())
-                    .or_insert_with(|| BucketState::new(limit, window_secs));
-
-                if state.can_proceed(window_secs) {
-                    break;
+                let mut state = self.state.lock().await;
+                let now = Instant::now();
+                if let Some(until) = state.global_retry_after {
+                    if now < until {
+                        Some(until - now)
+                    } else {
+                        state.global_retry_after = None;
+                        None
+                    }
+                } else {
+                    None
                 }
-                state.wait_duration()
+                .or_else(|| {
+                    if state.global.can_proceed(1) {
+                        None
+                    } else {
+                        Some(state.global.wait_duration())
+                    }
+                })
+                .unwrap_or_else(|| {
+                    let resolved = state
+                        .route_to_bucket
+                        .get(bucket)
+                        .cloned()
+                        .unwrap_or_else(|| bucket.to_string());
+                    let bucket_state = state
+                        .buckets
+                        .entry(resolved)
+                        .or_insert_with(|| BucketState::new(limit, window_secs));
+
+                    if bucket_state.can_proceed(window_secs) {
+                        Duration::ZERO
+                    } else {
+                        bucket_state.wait_duration()
+                    }
+                })
             };
 
-            if wait > Duration::ZERO {
-                log::debug!("[rate_limit] Bucket {} — waiting {}ms", bucket, wait.as_millis());
+            if wait == Duration::ZERO {
+                break;
+            } else {
+                log::debug!(
+                    "[rate_limit] Bucket {} — waiting {}ms",
+                    bucket,
+                    wait.as_millis()
+                );
                 tokio::time::sleep(wait).await;
             }
         }
     }
 
     /// Record a 429 response for a bucket with optional Retry-After header.
-    pub async fn record_429(&self, bucket: &str, headers: &reqwest::header::HeaderMap) {
-        let retry_after = headers
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(1.0);
-
-        log::warn!("[rate_limit] 429 on bucket {} — retry_after={:.2}s", bucket, retry_after);
-
-        let mut buckets = self.buckets.lock().await;
-        let state = buckets
-            .entry(bucket.to_string())
-            .or_insert_with(|| BucketState::new(5, 5));
-        state.record_429(retry_after);
-    }
-
-    /// Update bucket state from successful response headers.
-    pub async fn update_from_response(
+    pub async fn record_429(
         &self,
         bucket: &str,
         headers: &reqwest::header::HeaderMap,
+        response_body: &str,
     ) {
-        let mut buckets = self.buckets.lock().await;
-        if let Some(state) = buckets.get_mut(bucket) {
-            state.update_from_headers(headers);
+        let body: Option<serde_json::Value> = serde_json::from_str(response_body).ok();
+        let retry_after = body
+            .as_ref()
+            .and_then(|value| value.get("retry_after"))
+            .and_then(serde_json::Value::as_f64)
+            .or_else(|| {
+                headers
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<f64>().ok())
+            })
+            .unwrap_or(1.0);
+        let is_global = body
+            .as_ref()
+            .and_then(|value| value.get("global"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || headers
+                .get("x-ratelimit-global")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+
+        log::warn!(
+            "[rate_limit] 429 on bucket {} — retry_after={:.2}s",
+            bucket,
+            retry_after
+        );
+
+        let mut state = self.state.lock().await;
+        if is_global {
+            state.global_retry_after =
+                Some(Instant::now() + Duration::from_millis((retry_after * 1000.0) as u64 + 100));
+            return;
         }
+
+        let resolved = state
+            .route_to_bucket
+            .get(bucket)
+            .cloned()
+            .unwrap_or_else(|| bucket.to_string());
+        let bucket_state = state
+            .buckets
+            .entry(resolved)
+            .or_insert_with(|| BucketState::new(5, 5));
+        bucket_state.record_429(retry_after);
+    }
+
+    /// Update bucket state from successful response headers.
+    pub async fn update_from_response(&self, bucket: &str, headers: &reqwest::header::HeaderMap) {
+        let mut state = self.state.lock().await;
+        let resolved = if let Some(discord_bucket) = headers
+            .get("x-ratelimit-bucket")
+            .and_then(|value| value.to_str().ok())
+        {
+            let major_parameter = bucket
+                .split_once(':')
+                .map(|(_, major)| major)
+                .unwrap_or("global");
+            let resolved = format!("discord:{discord_bucket}:{major_parameter}");
+            state
+                .route_to_bucket
+                .insert(bucket.to_string(), resolved.clone());
+            resolved
+        } else {
+            state
+                .route_to_bucket
+                .get(bucket)
+                .cloned()
+                .unwrap_or_else(|| bucket.to_string())
+        };
+
+        state
+            .buckets
+            .entry(resolved)
+            .or_insert_with(|| BucketState::new(1, 1))
+            .update_from_headers(headers);
     }
 }
 
@@ -191,34 +296,50 @@ where
     T: for<'de> serde::Deserialize<'de>,
 {
     const MAX_ATTEMPTS: u32 = 4;
+    let retry = RetryConfig {
+        max_attempts: MAX_ATTEMPTS,
+        ..RetryConfig::default()
+    };
 
-    for attempt in 0..MAX_ATTEMPTS {
+    for attempt in 0..retry.max_attempts {
         // Pre-emptive rate limit wait
         rl.acquire(bucket, limit, window_secs).await;
 
-        let resp = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let resp = match client.get(url).send().await {
+            Ok(response) => response,
+            Err(error) if attempt + 1 < retry.max_attempts => {
+                tokio::time::sleep(Duration::from_millis(backoff_ms(attempt, &retry))).await;
+                log::warn!("[rate-limit] transient GET transport error in {bucket}: {error}");
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
 
         let status = resp.status();
         let headers = resp.headers().clone();
+        let body = resp.text().await.unwrap_or_default();
 
         if status == 429 {
-            rl.record_429(bucket, &headers).await;
-            if attempt + 1 < MAX_ATTEMPTS {
+            rl.record_429(bucket, &headers, &body).await;
+            if attempt + 1 < retry.max_attempts {
                 continue;
             }
-            return Err(format!("Rate limited on {} after {} attempts", url, MAX_ATTEMPTS));
+            return Err(format!(
+                "Rate limited in {} after {} attempts",
+                bucket, retry.max_attempts
+            ));
         }
 
         rl.update_from_response(bucket, &headers).await;
 
-        let body = resp.text().await.unwrap_or_default();
+        if status.is_server_error() && attempt + 1 < retry.max_attempts {
+            tokio::time::sleep(Duration::from_millis(backoff_ms(attempt, &retry))).await;
+            continue;
+        }
+
         if status.is_success() {
             return serde_json::from_str::<T>(&body)
-                .map_err(|e| format!("Parse error: {} | body: {}", e, &body[..body.len().min(300)]));
+                .map_err(|error| format!("Discord response parse error in {bucket}: {error}"));
         }
 
         // Non-retryable error
@@ -260,21 +381,28 @@ where
 
         let status = resp.status();
         let headers = resp.headers().clone();
+        let body_text = resp.text().await.unwrap_or_default();
 
         if status == 429 {
-            rl.record_429(bucket, &headers).await;
+            rl.record_429(bucket, &headers, &body_text).await;
             if attempt + 1 < MAX_ATTEMPTS {
                 continue;
             }
-            return Err(format!("Rate limited on {} after {} attempts", url, MAX_ATTEMPTS));
+            return Err(format!(
+                "Rate limited on {} after {} attempts",
+                url, MAX_ATTEMPTS
+            ));
         }
 
         rl.update_from_response(bucket, &headers).await;
 
-        let body_text = resp.text().await.unwrap_or_default();
         if status.is_success() {
             return serde_json::from_str::<T>(&body_text).map_err(|e| {
-                format!("Parse error: {} | body: {}", e, &body_text[..body_text.len().min(300)])
+                format!(
+                    "Parse error: {} | body: {}",
+                    e,
+                    &body_text[..body_text.len().min(300)]
+                )
             });
         }
 
@@ -303,21 +431,21 @@ pub async fn rate_limited_delete(
     for attempt in 0..MAX_ATTEMPTS {
         rl.acquire(bucket, limit, window_secs).await;
 
-        let resp = client
-            .delete(url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let resp = client.delete(url).send().await.map_err(|e| e.to_string())?;
 
         let status = resp.status();
         let headers = resp.headers().clone();
+        let body_text = resp.text().await.unwrap_or_default();
 
         if status == 429 {
-            rl.record_429(bucket, &headers).await;
+            rl.record_429(bucket, &headers, &body_text).await;
             if attempt + 1 < MAX_ATTEMPTS {
                 continue;
             }
-            return Err(format!("Rate limited on {} after {} attempts", url, MAX_ATTEMPTS));
+            return Err(format!(
+                "Rate limited on {} after {} attempts",
+                url, MAX_ATTEMPTS
+            ));
         }
 
         rl.update_from_response(bucket, &headers).await;
@@ -326,7 +454,6 @@ pub async fn rate_limited_delete(
             return Ok(());
         }
 
-        let body_text = resp.text().await.unwrap_or_default();
         return Err(format!(
             "Discord API error {} {}: {}",
             status.as_u16(),
@@ -365,22 +492,83 @@ where
 
         let status = resp.status();
         let headers = resp.headers().clone();
+        let body_text = resp.text().await.unwrap_or_default();
 
         if status == 429 {
-            rl.record_429(bucket, &headers).await;
+            rl.record_429(bucket, &headers, &body_text).await;
             if attempt + 1 < MAX_ATTEMPTS {
                 continue;
             }
-            return Err(format!("Rate limited on {} after {} attempts", url, MAX_ATTEMPTS));
+            return Err(format!(
+                "Rate limited on {} after {} attempts",
+                url, MAX_ATTEMPTS
+            ));
         }
 
         rl.update_from_response(bucket, &headers).await;
 
-        let body_text = resp.text().await.unwrap_or_default();
         if status.is_success() {
             return serde_json::from_str::<T>(&body_text).map_err(|e| {
-                format!("Parse error: {} | body: {}", e, &body_text[..body_text.len().min(300)])
+                format!(
+                    "Parse error: {} | body: {}",
+                    e,
+                    &body_text[..body_text.len().min(300)]
+                )
             });
+        }
+
+        return Err(format!(
+            "Discord API error {} {}: {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or(""),
+            &body_text[..body_text.len().min(300)]
+        ));
+    }
+
+    Err(format!("Max attempts reached for {}", url))
+}
+
+/// Rate-limit aware PATCH for endpoints where the response body is irrelevant.
+pub async fn rate_limited_patch_empty(
+    client: &reqwest::Client,
+    rl: &RateLimiter,
+    url: &str,
+    body: &serde_json::Value,
+    bucket: &str,
+    limit: u32,
+    window_secs: u64,
+) -> Result<(), String> {
+    const MAX_ATTEMPTS: u32 = 4;
+
+    for attempt in 0..MAX_ATTEMPTS {
+        rl.acquire(bucket, limit, window_secs).await;
+
+        let resp = client
+            .patch(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body_text = resp.text().await.unwrap_or_default();
+
+        if status == 429 {
+            rl.record_429(bucket, &headers, &body_text).await;
+            if attempt + 1 < MAX_ATTEMPTS {
+                continue;
+            }
+            return Err(format!(
+                "Rate limited on {} after {} attempts",
+                url, MAX_ATTEMPTS
+            ));
+        }
+
+        rl.update_from_response(bucket, &headers).await;
+
+        if status.is_success() {
+            return Ok(());
         }
 
         return Err(format!(
@@ -415,13 +603,17 @@ pub async fn rate_limited_put_empty(
 
         let status = resp.status();
         let headers = resp.headers().clone();
+        let body_text = resp.text().await.unwrap_or_default();
 
         if status == 429 {
-            rl.record_429(bucket, &headers).await;
+            rl.record_429(bucket, &headers, &body_text).await;
             if attempt + 1 < MAX_ATTEMPTS {
                 continue;
             }
-            return Err(format!("Rate limited on {} after {} attempts", url, MAX_ATTEMPTS));
+            return Err(format!(
+                "Rate limited on {} after {} attempts",
+                url, MAX_ATTEMPTS
+            ));
         }
 
         rl.update_from_response(bucket, &headers).await;
@@ -430,7 +622,6 @@ pub async fn rate_limited_put_empty(
             return Ok(());
         }
 
-        let body_text = resp.text().await.unwrap_or_default();
         return Err(format!(
             "Discord API error {} {}: {}",
             status.as_u16(),
@@ -440,6 +631,58 @@ pub async fn rate_limited_put_empty(
     }
 
     Err(format!("Max attempts reached for {}", url))
+}
+
+/// Rate-limit aware POST for endpoints that return no JSON body.
+pub async fn rate_limited_post_empty(
+    client: &reqwest::Client,
+    rl: &RateLimiter,
+    url: &str,
+    body: Option<&serde_json::Value>,
+    bucket: &str,
+    limit: u32,
+    window_secs: u64,
+) -> Result<(), String> {
+    const MAX_ATTEMPTS: u32 = 4;
+
+    for attempt in 0..MAX_ATTEMPTS {
+        rl.acquire(bucket, limit, window_secs).await;
+
+        let request = client.post(url);
+        let request = if let Some(body) = body {
+            request.json(body)
+        } else {
+            request
+        };
+        let response = request.send().await.map_err(|error| error.to_string())?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let response_body = response.text().await.unwrap_or_default();
+
+        if status == 429 {
+            rl.record_429(bucket, &headers, &response_body).await;
+            if attempt + 1 < MAX_ATTEMPTS {
+                continue;
+            }
+            return Err(format!(
+                "Rate limited on {url} after {MAX_ATTEMPTS} attempts"
+            ));
+        }
+
+        rl.update_from_response(bucket, &headers).await;
+        if status.is_success() {
+            return Ok(());
+        }
+
+        return Err(format!(
+            "Discord API error {} {}: {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or(""),
+            &response_body[..response_body.len().min(300)]
+        ));
+    }
+
+    Err(format!("Max attempts reached for {url}"))
 }
 
 /// Discord rate limit presets (documented + conservative estimates).

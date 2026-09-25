@@ -1,17 +1,18 @@
-use tauri::State;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::State;
+use zeroize::Zeroizing;
 
+use crate::commands::account::load_accounts_from_store;
+use crate::commands::attachments::{AttachmentRegistry, MAX_ATTACHMENT_BYTES};
+use crate::gateway::GatewayManager;
+use crate::http_client::discord_client;
+use crate::rate_limit::{
+    limits, rate_limited_delete, rate_limited_get, rate_limited_patch, rate_limited_patch_empty,
+    rate_limited_post, rate_limited_post_empty, rate_limited_put_empty, RateLimiter,
+};
 use crate::session::SessionManager;
 use crate::storage;
-use crate::gateway::GatewayManager;
-use crate::commands::account::load_accounts_from_store;
-use crate::http_client::{discord_client, RetryConfig, is_retryable_status, backoff_ms};
-use crate::rate_limit::{
-    RateLimiter, limits,
-    rate_limited_get, rate_limited_post, rate_limited_delete,
-    rate_limited_patch, rate_limited_put_empty,
-};
 
 // --- DTOs de resposta ---
 
@@ -34,6 +35,29 @@ pub struct DiscordChannel {
     pub parent_id: Option<String>,
     pub topic: Option<String>,
     pub nsfw: Option<bool>,
+    pub last_message_id: Option<String>,
+    pub available_tags: Option<Vec<serde_json::Value>>,
+    pub permission_overwrites: Option<Vec<PermissionOverwrite>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PermissionOverwrite {
+    pub id: String,
+    #[serde(rename(deserialize = "type", serialize = "overwrite_type"))]
+    pub overwrite_type: u8,
+    pub allow: String,
+    pub deny: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CurrentGuildMember {
+    pub roles: Vec<String>,
+    pub nick: Option<String>,
+    pub avatar: Option<String>,
+    pub deaf: bool,
+    pub mute: bool,
+    pub pending: Option<bool>,
+    pub permissions: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -96,11 +120,21 @@ pub struct DiscordRelationship {
 pub async fn get_relationships(
     account_id: String,
     _state: State<'_, SessionManager>,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscordRelationship>, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    retry_get(&client, "https://discord.com/api/v10/users/@me/relationships").await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/relationships",
+        "relationships:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -112,7 +146,10 @@ pub async fn remove_relationship(
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/users/@me/relationships/{}", user_id);
+    let url = format!(
+        "https://discord.com/api/v10/users/@me/relationships/{}",
+        user_id
+    );
     let bucket = format!("relationship:{}", user_id);
     let (lim, win) = limits::RELATIONSHIP;
     rate_limited_delete(&client, &rl, &url, &bucket, lim, win).await
@@ -127,7 +164,10 @@ pub async fn block_user(
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/users/@me/relationships/{}", user_id);
+    let url = format!(
+        "https://discord.com/api/v10/users/@me/relationships/{}",
+        user_id
+    );
     let bucket = format!("relationship:{}", user_id);
     let body = serde_json::json!({ "type": 2 });
     let (lim, win) = limits::RELATIONSHIP;
@@ -139,17 +179,16 @@ pub async fn set_user_note(
     account_id: String,
     user_id: String,
     note: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
     let url = format!("https://discord.com/api/v10/users/@me/notes/{}", user_id);
-    let res = client.put(&url).json(&serde_json::json!({ "note": note })).send().await.map_err(|e| e.to_string())?;
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("HTTP {}", res.status()))
-    }
+    let body = serde_json::json!({ "note": note });
+    let bucket = format!("user-note:{user_id}");
+    let (limit, window) = limits::RELATIONSHIP;
+    rate_limited_put_empty(&client, &rl, &url, Some(&body), &bucket, limit, window).await
 }
 
 #[tauri::command]
@@ -161,7 +200,10 @@ pub async fn create_channel_invite(
 ) -> Result<serde_json::Value, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/channels/{}/invites", channel_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/invites",
+        channel_id
+    );
     let payload = serde_json::json!({
         "max_age": 86400,
         "max_uses": 0,
@@ -176,174 +218,319 @@ pub async fn create_channel_invite(
 pub async fn fetch_user_profile(
     account_id: String,
     user_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
     let url = format!("https://discord.com/api/v10/users/{}/profile?with_mutual_guilds=true&with_mutual_friends=true", user_id);
-    retry_get(&client, &url).await
+    let bucket = format!("profile:{user_id}");
+    let (limit, window) = limits::PROFILE_FETCH;
+    rate_limited_get(&client, &rl, &url, &bucket, limit, window).await
 }
 
 #[tauri::command]
 pub async fn start_dm_call(
     account_id: String,
     channel_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
-) -> Result<serde_json::Value, String> {
+) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/channels/{}/call/ring", channel_id);
-    
-    // Faz o POST para iniciar o ring/call com a API do Discord
-    let response = client
-        .post(&url)
-        .json(&serde_json::json!({ "recipients": null }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/call/ring",
+        channel_id
+    );
 
-    if !response.status().is_success() {
-        return Err(format!("Falha ao iniciar call: {}", response.status()));
-    }
+    let bucket = format!("dm-call:{channel_id}");
+    rate_limited_post_empty(
+        &client,
+        &rl,
+        &url,
+        Some(&serde_json::json!({ "recipients": null })),
+        &bucket,
+        2,
+        5,
+    )
+    .await
+}
 
-    Ok(serde_json::json!({ "status": "success" }))
+#[tauri::command]
+pub async fn stop_dm_call(
+    account_id: String,
+    channel_id: String,
+    rl: State<'_, RateLimiter>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/call/stop-ringing",
+        channel_id
+    );
+
+    let bucket = format!("dm-call-stop:{channel_id}");
+    rate_limited_post_empty(
+        &client,
+        &rl,
+        &url,
+        Some(&serde_json::json!({})),
+        &bucket,
+        2,
+        5,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn get_guilds(
     account_id: String,
     _state: State<'_, SessionManager>,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscordGuild>, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    retry_get(&client, "https://discord.com/api/v10/users/@me/guilds?with_counts=false").await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/guilds?with_counts=false",
+        "guilds:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn get_recent_mentions(
     account_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscordMessage>, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
     // The Discord API endpoint for recent mentions
-    retry_get(&client, "https://discord.com/api/v10/users/@me/mentions?limit=25").await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/mentions?limit=25",
+        "mentions:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn get_auth_sessions(
     account_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    retry_get(&client, "https://discord.com/api/v10/auth/sessions").await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/auth/sessions",
+        "auth-sessions:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn revoke_auth_session(
     account_id: String,
     session_id_hash: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
-) -> Result<serde_json::Value, String> {
+) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/auth/sessions/{}", session_id_hash);
-    
-    // As the API uses POST with a specific payload to revoke or sometimes DELETE.
-    // Based on standard discord API, revocation is done via POST to auth/sessions/<id> or DELETE.
-    // Testing reveals it is a DELETE.
-    let response = client
-        .delete(&url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let url = format!(
+        "https://discord.com/api/v10/auth/sessions/{}",
+        session_id_hash
+    );
 
-    if !response.status().is_success() {
-        let err_text = response.text().await.unwrap_or_default();
-        return Err(format!("Falha ao revogar sessão: {}", err_text));
-    }
-
-    Ok(serde_json::json!({ "status": "success" }))
+    let bucket = format!("auth-session:{session_id_hash}");
+    let (limit, window) = limits::RELATIONSHIP;
+    rate_limited_delete(&client, &rl, &url, &bucket, limit, window).await
 }
 
 #[tauri::command]
 pub async fn get_channels(
     account_id: String,
     guild_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscordChannel>, String> {
+    let started_at = std::time::Instant::now();
+    log::info!(
+        "[guild_content] channels_request_started account_id={} guild_id={}",
+        account_id,
+        guild_id
+    );
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    
+
     // 1. Fetch normal channels
     let url_channels = format!("https://discord.com/api/v10/guilds/{}/channels", guild_id);
-    let mut channels: Vec<DiscordChannel> = retry_get(&client, &url_channels).await?;
+    let (limit, window) = limits::GENERAL_GET;
+    let channel_bucket = format!("guild-channels:{guild_id}");
+    let mut channels: Vec<DiscordChannel> = match rate_limited_get(
+        &client,
+        &rl,
+        &url_channels,
+        &channel_bucket,
+        limit,
+        window,
+    )
+    .await
+    {
+        Ok(channels) => channels,
+        Err(error) => {
+            log::warn!(
+                "[guild_content] channels_request_failed account_id={} guild_id={} duration_ms={} error={}",
+                account_id,
+                guild_id,
+                started_at.elapsed().as_millis(),
+                error
+            );
+            return Err(error);
+        }
+    };
 
     // 2. Fetch active threads
-    let url_threads = format!("https://discord.com/api/v10/guilds/{}/threads/active", guild_id);
-    let threads_resp = retry_get::<serde_json::Value>(&client, &url_threads).await;
-    
+    let url_threads = format!(
+        "https://discord.com/api/v10/guilds/{}/threads/active",
+        guild_id
+    );
+    let thread_bucket = format!("guild-threads:{guild_id}");
+    let threads_resp = rate_limited_get::<serde_json::Value>(
+        &client,
+        &rl,
+        &url_threads,
+        &thread_bucket,
+        limit,
+        window,
+    )
+    .await;
+
     // 3. Combine them if threads were fetched successfully
-    if let Ok(threads_data) = threads_resp {
-        if let Some(threads_array) = threads_data.get("threads").and_then(|t| t.as_array()) {
-            for thread_val in threads_array {
-                if let Ok(thread_channel) = serde_json::from_value::<DiscordChannel>(thread_val.clone()) {
-                    channels.push(thread_channel);
+    match threads_resp {
+        Ok(threads_data) => {
+            if let Some(threads_array) = threads_data.get("threads").and_then(|t| t.as_array()) {
+                for thread_val in threads_array {
+                    if let Ok(thread_channel) =
+                        serde_json::from_value::<DiscordChannel>(thread_val.clone())
+                    {
+                        channels.push(thread_channel);
+                    }
                 }
             }
         }
+        Err(error) => log::warn!(
+            "[guild_content] active_threads_unavailable account_id={} guild_id={} error={}",
+            account_id,
+            guild_id,
+            error
+        ),
     }
 
+    log::info!(
+        "[guild_content] channels_request_succeeded account_id={} guild_id={} channel_count={} duration_ms={}",
+        account_id,
+        guild_id,
+        channels.len(),
+        started_at.elapsed().as_millis()
+    );
     Ok(channels)
+}
+
+#[tauri::command]
+pub async fn get_current_guild_member(
+    account_id: String,
+    guild_id: String,
+    rl: State<'_, RateLimiter>,
+    app: tauri::AppHandle,
+) -> Result<CurrentGuildMember, String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    let url = format!("https://discord.com/api/v10/users/@me/guilds/{guild_id}/member");
+    let bucket = format!("current-member:{guild_id}");
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(&client, &rl, &url, &bucket, limit, window).await
 }
 
 #[tauri::command]
 pub async fn get_forum_threads(
     account_id: String,
     channel_id: String,
-    _guild_id: String,
+    guild_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
 
     // Busca threads ativos primeiro
-    let active_url = format!("https://discord.com/api/v10/guilds/{}/threads/active", _guild_id);
-    let active_res = client.get(&active_url)
-        .send().await.map_err(|e| e.to_string())?;
+    let active_url = format!(
+        "https://discord.com/api/v10/guilds/{}/threads/active",
+        guild_id
+    );
+    let (limit, window) = limits::GENERAL_GET;
+    let active_data = rate_limited_get::<serde_json::Value>(
+        &client,
+        &rl,
+        &active_url,
+        &format!("active-threads:{guild_id}"),
+        limit,
+        window,
+    )
+    .await?;
 
     let mut all_threads: Vec<serde_json::Value> = Vec::new();
 
-    if active_res.status().is_success() {
-        if let Ok(data) = active_res.json::<serde_json::Value>().await {
-            if let Some(threads) = data["threads"].as_array() {
-                let channel_threads: Vec<_> = threads.iter()
-                    .filter(|t| t["parent_id"].as_str() == Some(&channel_id))
-                    .cloned()
-                    .collect();
-                all_threads.extend(channel_threads);
-            }
-        }
+    if let Some(threads) = active_data["threads"].as_array() {
+        let channel_threads: Vec<_> = threads
+            .iter()
+            .filter(|t| t["parent_id"].as_str() == Some(&channel_id))
+            .cloned()
+            .collect();
+        all_threads.extend(channel_threads);
     }
 
     // Busca também threads arquivados
-    let archived_url = format!("https://discord.com/api/v10/channels/{}/threads/archived/public?limit=100", channel_id);
-    if let Ok(archived_res) = client.get(&archived_url).send().await {
-        if archived_res.status().is_success() {
-            if let Ok(data) = archived_res.json::<serde_json::Value>().await {
-                if let Some(threads) = data["threads"].as_array() {
-                    // Avoid duplicates
-                    let existing_ids: std::collections::HashSet<_> = all_threads.iter()
-                        .filter_map(|t| t["id"].as_str().map(|s| s.to_string()))
-                        .collect();
-                    for t in threads {
-                        if let Some(id) = t["id"].as_str() {
-                            if !existing_ids.contains(id) {
-                                all_threads.push(t.clone());
-                            }
-                        }
+    let archived_url = format!(
+        "https://discord.com/api/v10/channels/{}/threads/archived/public?limit=100",
+        channel_id
+    );
+    if let Ok(data) = rate_limited_get::<serde_json::Value>(
+        &client,
+        &rl,
+        &archived_url,
+        &format!("archived-threads:{channel_id}"),
+        limit,
+        window,
+    )
+    .await
+    {
+        if let Some(threads) = data["threads"].as_array() {
+            let existing_ids: std::collections::HashSet<_> = all_threads
+                .iter()
+                .filter_map(|t| t["id"].as_str().map(str::to_owned))
+                .collect();
+            for thread in threads {
+                if let Some(id) = thread["id"].as_str() {
+                    if !existing_ids.contains(id) {
+                        all_threads.push(thread.clone());
                     }
                 }
             }
@@ -366,7 +553,10 @@ pub async fn create_forum_post(
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
 
-    let url = format!("https://discord.com/api/v10/channels/{}/threads", channel_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/threads",
+        channel_id
+    );
     let bucket = format!("forum_post:{}", channel_id);
 
     let body = serde_json::json!({
@@ -387,6 +577,7 @@ pub async fn get_messages(
     channel_id: String,
     before: Option<String>,
     after: Option<String>,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscordMessage>, String> {
     let token = get_token(&account_id, &app)?;
@@ -402,7 +593,9 @@ pub async fn get_messages(
         url.push_str(&format!("&after={}", after_id));
     }
 
-    retry_get(&client, &url).await
+    let bucket = format!("messages:{channel_id}");
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(&client, &rl, &url, &bucket, limit, window).await
 }
 
 #[tauri::command]
@@ -422,36 +615,49 @@ pub async fn send_message(
         body["message_reference"] = serde_json::json!({ "message_id": ref_id });
     }
 
-    let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages",
+        channel_id
+    );
     let bucket = format!("msg_send:{}", channel_id);
     let (lim, win) = limits::MSG_SEND;
     rate_limited_post::<DiscordMessage>(&client, &rl, &url, &body, &bucket, lim, win).await
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_message_with_attachment(
     account_id: String,
     channel_id: String,
     content: String,
     reply_to: Option<String>,
     file_name: String,
-    file_path: Option<String>,
+    file_handle: Option<String>,
     file_data: Option<Vec<u8>>,
+    attachments: State<'_, AttachmentRegistry>,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<DiscordMessage, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
 
-    let part = if let Some(path) = file_path {
-        let mut file = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
+    let part = if let Some(handle) = file_handle {
+        let selected = attachments.take(&handle)?;
+        let mut file = tokio::fs::File::open(&selected.path)
+            .await
+            .map_err(|_| "Não foi possível abrir o anexo selecionado.".to_string())?;
         let metadata = file.metadata().await.map_err(|e| e.to_string())?;
         let total_size = metadata.len();
-        
+
+        if total_size == 0 || total_size > MAX_ATTACHMENT_BYTES {
+            return Err("O anexo deve ter entre 1 byte e 25 MB.".to_string());
+        }
+
         let app_handle = app.clone();
         let stream = async_stream::stream! {
             let mut buffer = vec![0; 64 * 1024]; // 64 KB chunks
             let mut uploaded: u64 = 0;
-            
+
             loop {
                 match tokio::io::AsyncReadExt::read(&mut file, &mut buffer).await {
                     Ok(0) => break,
@@ -462,14 +668,14 @@ pub async fn send_message_with_attachment(
                         } else {
                             100.0
                         };
-                        
+
                         use tauri::Emitter;
                         let _ = app_handle.emit("upload-progress", serde_json::json!({
                             "progress": percentage,
                             "uploaded": uploaded,
                             "total": total_size
                         }));
-                        
+
                         yield Ok::<bytes::Bytes, std::io::Error>(bytes::Bytes::copy_from_slice(&buffer[..n]));
                     }
                     Err(e) => {
@@ -479,11 +685,15 @@ pub async fn send_message_with_attachment(
                 }
             }
         };
-        
+
         let body = reqwest::Body::wrap_stream(stream);
-        reqwest::multipart::Part::stream_with_length(body, total_size).file_name(file_name)
+        reqwest::multipart::Part::stream_with_length(body, total_size).file_name(selected.name)
     } else if let Some(data) = file_data {
-        reqwest::multipart::Part::bytes(data).file_name(file_name)
+        if data.is_empty() || data.len() as u64 > MAX_ATTACHMENT_BYTES {
+            return Err("O anexo deve ter entre 1 byte e 25 MB.".to_string());
+        }
+        let safe_name = validate_attachment_name(&file_name)?;
+        reqwest::multipart::Part::bytes(data).file_name(safe_name)
     } else {
         return Err("Nenhum anexo fornecido".to_string());
     };
@@ -494,14 +704,30 @@ pub async fn send_message_with_attachment(
     if let Some(ref_id) = reply_to {
         payload["message_reference"] = serde_json::json!({ "message_id": ref_id });
     }
-    
+
     form = form.text("payload_json", payload.to_string());
 
-    let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
-    retry_post_multipart(&client, &url, form).await
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages",
+        channel_id
+    );
+    let bucket = format!("msg_send:{channel_id}");
+    retry_post_multipart(&client, &url, form, &rl, &bucket).await
+}
+
+fn validate_attachment_name(name: &str) -> Result<String, String> {
+    let is_invalid = name.is_empty()
+        || name.len() > 255
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control);
+    if is_invalid {
+        return Err("O nome do anexo é inválido.".to_string());
+    }
+    Ok(name.to_string())
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_voice_message(
     account_id: String,
     channel_id: String,
@@ -509,6 +735,7 @@ pub async fn send_voice_message(
     duration_secs: f64,
     waveform: String,
     reply_to: Option<String>,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<DiscordMessage, String> {
     let token = get_token(&account_id, &app)?;
@@ -539,8 +766,12 @@ pub async fn send_voice_message(
         .part("files[0]", part)
         .text("payload_json", payload.to_string());
 
-    let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
-    retry_post_multipart::<DiscordMessage>(&client, &url, form).await
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages",
+        channel_id
+    );
+    let bucket = format!("msg_send:{channel_id}");
+    retry_post_multipart::<DiscordMessage>(&client, &url, form, &rl, &bucket).await
 }
 
 #[tauri::command]
@@ -554,7 +785,10 @@ pub async fn edit_message(
 ) -> Result<DiscordMessage, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/channels/{}/messages/{}", channel_id, message_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages/{}",
+        channel_id, message_id
+    );
     let bucket = format!("msg_edit:{}", channel_id);
     let payload = serde_json::json!({ "content": content });
     let (lim, win) = limits::MSG_EDIT;
@@ -571,7 +805,10 @@ pub async fn delete_message(
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/channels/{}/messages/{}", channel_id, message_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages/{}",
+        channel_id, message_id
+    );
     let bucket = format!("msg_delete:{}", channel_id);
     let (lim, win) = limits::MSG_DELETE;
     rate_limited_delete(&client, &rl, &url, &bucket, lim, win).await
@@ -580,51 +817,86 @@ pub async fn delete_message(
 #[tauri::command]
 pub async fn get_dms(
     account_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscordDM>, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    retry_get(&client, "https://discord.com/api/v10/users/@me/channels").await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/channels",
+        "dms:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn create_dm(
     account_id: String,
     recipient_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<DiscordDM, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
     let payload = serde_json::json!({ "recipient_id": recipient_id });
-    
-    let res = client.post("https://discord.com/api/v10/users/@me/channels")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to create DM: {}", e))?;
-        
-    let text = res.text().await.unwrap_or_default();
-    serde_json::from_str(&text).map_err(|e| format!("Parse error: {}", e))
+
+    let bucket = format!("dm-create:{recipient_id}");
+    let (limit, window) = limits::DM_CREATE;
+    rate_limited_post(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/channels",
+        &payload,
+        &bucket,
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn get_user_info(
     account_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<DiscordUser, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    retry_get(&client, "https://discord.com/api/v10/users/@me").await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me",
+        "user:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn get_self_profile(
     account_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<DiscordUser, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    retry_get(&client, "https://discord.com/api/v10/users/@me").await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me",
+        "user:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -632,7 +904,10 @@ pub async fn get_gateway_presences(
     account_id: String,
     gateway_manager: tauri::State<'_, GatewayManager>,
 ) -> Result<Vec<Value>, String> {
-    let cache = gateway_manager.cached_presences.lock().unwrap();
+    let cache = gateway_manager
+        .cached_presences
+        .lock()
+        .map_err(|_| "O cache de presenças está indisponível.".to_string())?;
     if let Some(list) = cache.get(&account_id) {
         Ok(list.clone())
     } else {
@@ -644,6 +919,7 @@ pub async fn get_gateway_presences(
 pub async fn set_status(
     account_id: String,
     status: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
@@ -651,18 +927,17 @@ pub async fn set_status(
 
     let body = serde_json::json!({ "status": status });
 
-    let resp = client
-        .patch("https://discord.com/api/v10/users/@me/settings")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("Erro ao definir status: HTTP {}", resp.status()))
-    }
+    let (limit, window) = limits::RELATIONSHIP;
+    rate_limited_patch_empty(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/settings",
+        &body,
+        "user-settings:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -678,6 +953,7 @@ pub struct UpdateProfilePayload {
 pub async fn update_user_profile(
     account_id: String,
     payload: UpdateProfilePayload,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<DiscordUser, String> {
     let token = get_token(&account_id, &app)?;
@@ -709,29 +985,17 @@ pub async fn update_user_profile(
         body.insert("accent_color".to_string(), Value::Number(ac.into()));
     }
 
-    let resp = client
-        .patch(url)
-        .json(&Value::Object(body))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-
-    if status.is_success() {
-        serde_json::from_str::<DiscordUser>(&text).map_err(|e| format!("Parse error: {} | body: {}", e, text))
-    } else {
-        Err(format!("Discord API error {}: {}", status, text))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CustomStatusPayload {
-    pub text: String,
-    pub emoji_name: Option<String>,
-    pub emoji_id: Option<String>,
-    pub expires_at: Option<String>,
+    let (limit, window) = limits::RELATIONSHIP;
+    rate_limited_patch(
+        &client,
+        &rl,
+        url,
+        &Value::Object(body),
+        "user-profile:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -741,6 +1005,7 @@ pub async fn set_custom_status(
     emoji_name: Option<String>,
     emoji_id: Option<String>,
     expires_at: Option<String>,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
@@ -762,23 +1027,23 @@ pub async fn set_custom_status(
         "custom_status": custom_status
     });
 
-    let resp = client
-        .patch("https://discord.com/api/v10/users/@me/settings")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("Erro ao definir status personalizado: HTTP {}", resp.status()))
-    }
+    let (limit, window) = limits::RELATIONSHIP;
+    rate_limited_patch_empty(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/settings",
+        &body,
+        "user-settings:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn clear_custom_status(
     account_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
@@ -786,51 +1051,49 @@ pub async fn clear_custom_status(
 
     let body = serde_json::json!({ "custom_status": null });
 
-    let resp = client
-        .patch("https://discord.com/api/v10/users/@me/settings")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("Erro ao limpar status personalizado: HTTP {}", resp.status()))
-    }
+    let (limit, window) = limits::RELATIONSHIP;
+    rate_limited_patch_empty(
+        &client,
+        &rl,
+        "https://discord.com/api/v10/users/@me/settings",
+        &body,
+        "user-settings:@me",
+        limit,
+        window,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn close_dm(
     account_id: String,
     channel_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
-) -> Result<serde_json::Value, String> {
+) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
 
     let url = format!("https://discord.com/api/v10/channels/{}", channel_id);
-    let resp = client.delete(&url).send().await.map_err(|e| e.to_string())?;
-
-    if resp.status().is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        serde_json::from_str(&body_text).map_err(|e| e.to_string())
-    } else {
-        Err(format!("Falha ao fechar DM: HTTP {}", resp.status()))
-    }
+    let bucket = format!("close-dm:{channel_id}");
+    let (limit, window) = limits::DM_CREATE;
+    rate_limited_delete(&client, &rl, &url, &bucket, limit, window).await
 }
 
 #[tauri::command]
 pub async fn get_pinned_messages(
     account_id: String,
     channel_id: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<Vec<DiscordMessage>, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
 
     let url = format!("https://discord.com/api/v10/channels/{}/pins", channel_id);
-    retry_get(&client, &url).await
+    let bucket = format!("pins:{channel_id}");
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(&client, &rl, &url, &bucket, limit, window).await
 }
 
 #[tauri::command]
@@ -843,7 +1106,10 @@ pub async fn pin_message(
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/channels/{}/pins/{}", channel_id, message_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/pins/{}",
+        channel_id, message_id
+    );
     let bucket = format!("pin:{}", channel_id);
     let (lim, win) = limits::PIN;
     rate_limited_put_empty(&client, &rl, &url, None, &bucket, lim, win).await
@@ -859,135 +1125,53 @@ pub async fn unpin_message(
 ) -> Result<(), String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = format!("https://discord.com/api/v10/channels/{}/pins/{}", channel_id, message_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/pins/{}",
+        channel_id, message_id
+    );
     let bucket = format!("pin:{}", channel_id);
     let (lim, win) = limits::PIN;
     rate_limited_delete(&client, &rl, &url, &bucket, lim, win).await
 }
 
-// --- Retry helpers ---
-
-/// GET with exponential backoff on transient errors (429, 5xx).
-async fn retry_get<T>(client: &reqwest::Client, url: &str) -> Result<T, String>
-where
-    T: for<'de> serde::Deserialize<'de>,
-{
-    let config = RetryConfig::default();
-    let mut last_err = String::new();
-
-    for attempt in 0..config.max_attempts {
-        if attempt > 0 {
-            let delay = backoff_ms(attempt - 1, &config);
-            log::warn!("[discord] GET {} — retry {}/{} after {}ms", url, attempt, config.max_attempts - 1, delay);
-            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-        }
-
-        let resp = match client.get(url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                last_err = e.to_string();
-                continue;
-            }
-        };
-
-        let status = resp.status();
-
-        // Honor Retry-After on 429
-        if status == 429 {
-            let retry_ms = resp.headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<f64>().ok())
-                .map(|s| (s * 1000.0) as u64 + 200)
-                .unwrap_or_else(|| backoff_ms(attempt, &config));
-            log::warn!("[discord] 429 GET {} — waiting {}ms (Retry-After)", url, retry_ms);
-            last_err = format!("Rate limited (429) on {}", url);
-            tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
-            continue;
-        }
-
-        let body = resp.text().await.unwrap_or_default();
-
-        if status.is_success() {
-            return serde_json::from_str::<T>(&body).map_err(|e| {
-                format!("Parse error: {} | body: {}", e, &body[..body.len().min(300)])
-            });
-        }
-
-        last_err = format!("Discord API error {}: {}", status, &body[..body.len().min(300)]);
-
-        // Only retry on transient server errors
-        if !matches!(status.as_u16(), 500 | 502 | 503 | 504) {
-            break;
-        }
-    }
-
-    Err(last_err)
+#[tauri::command]
+pub async fn discord_add_reaction(
+    account_id: String,
+    channel_id: String,
+    message_id: String,
+    emoji: String,
+    rl: State<'_, RateLimiter>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    let encoded_emoji = urlencoding::encode(&emoji);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
+    );
+    let bucket = format!("reaction:{channel_id}:{message_id}");
+    let (limit, window) = limits::REACTION;
+    rate_limited_put_empty(&client, &rl, &url, None, &bucket, limit, window).await
 }
 
-/// POST JSON with exponential backoff on transient errors.
-async fn retry_post_json<T>(
-    client: &reqwest::Client,
-    url: &str,
-    body: &serde_json::Value,
-) -> Result<T, String>
-where
-    T: for<'de> serde::Deserialize<'de>,
-{
-    let config = RetryConfig::default();
-    let mut last_err = String::new();
-
-    for attempt in 0..config.max_attempts {
-        if attempt > 0 {
-            let delay = backoff_ms(attempt - 1, &config);
-            log::warn!("[discord] POST {} — retry {}/{} after {}ms", url, attempt, config.max_attempts - 1, delay);
-            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-        }
-
-        let resp = match client.post(url).json(body).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                last_err = e.to_string();
-                continue;
-            }
-        };
-
-        let status = resp.status();
-
-        // Honor Retry-After on 429
-        if status == 429 {
-            let retry_ms = resp.headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<f64>().ok())
-                .map(|s| (s * 1000.0) as u64 + 200)
-                .unwrap_or_else(|| backoff_ms(attempt, &config));
-            log::warn!("[discord] 429 POST {} — waiting {}ms (Retry-After)", url, retry_ms);
-            last_err = format!("Rate limited (429) on {}", url);
-            tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
-            continue;
-        }
-
-        let body_text = resp.text().await.unwrap_or_default();
-
-        if status.is_success() {
-            return serde_json::from_str::<T>(&body_text).map_err(|e| {
-                format!("Parse error: {} | body: {}", e, &body_text[..body_text.len().min(300)])
-            });
-        }
-
-        last_err = format!(
-            "Discord API error {}: {}",
-            status,
-            &body_text[..body_text.len().min(300)]
-        );
-
-        if !matches!(status.as_u16(), 500 | 502 | 503 | 504) {
-            break;
-        }
-    }
-
-    Err(last_err)
+#[tauri::command]
+pub async fn discord_remove_reaction(
+    account_id: String,
+    channel_id: String,
+    message_id: String,
+    emoji: String,
+    rl: State<'_, RateLimiter>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let token = get_token(&account_id, &app)?;
+    let client = discord_client(&token)?;
+    let encoded_emoji = urlencoding::encode(&emoji);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
+    );
+    let bucket = format!("reaction:{channel_id}:{message_id}");
+    let (limit, window) = limits::REACTION;
+    rate_limited_delete(&client, &rl, &url, &bucket, limit, window).await
 }
 
 /// POST multipart form with exponential backoff on transient errors.
@@ -995,26 +1179,44 @@ async fn retry_post_multipart<T>(
     client: &reqwest::Client,
     url: &str,
     form: reqwest::multipart::Form,
+    rl: &RateLimiter,
+    bucket: &str,
 ) -> Result<T, String>
 where
     T: for<'de> serde::Deserialize<'de>,
 {
-    // Since reqwest::multipart::Form cannot be cloned easily if it contains streams, 
+    // Since reqwest::multipart::Form cannot be cloned easily if it contains streams,
     // and we are using raw bytes, we need to recreate the form if we retry.
-    // Let's just avoid retrying for file uploads 
+    // Let's just avoid retrying for file uploads
     // to keep it simple and avoid memory overhead, or just try once and return.
 
+    let (limit, window) = limits::MSG_SEND;
+    rl.acquire(bucket, limit, window).await;
     let resp = match client.post(url).multipart(form).send().await {
         Ok(r) => r,
         Err(e) => return Err(e.to_string()),
     };
 
     let status = resp.status();
+    let headers = resp.headers().clone();
     let body_text = resp.text().await.unwrap_or_default();
+
+    if status == 429 {
+        rl.record_429(bucket, &headers, &body_text).await;
+        return Err(
+            "O Discord limitou temporariamente o envio. Tente novamente em instantes.".to_string(),
+        );
+    }
+
+    rl.update_from_response(bucket, &headers).await;
 
     if status.is_success() {
         return serde_json::from_str::<T>(&body_text).map_err(|e| {
-            format!("Parse error: {} | body: {}", e, &body_text[..body_text.len().min(300)])
+            format!(
+                "Parse error: {} | body: {}",
+                e,
+                &body_text[..body_text.len().min(300)]
+            )
         });
     }
 
@@ -1033,7 +1235,9 @@ pub async fn discord_subscribe_guild(
     guild_id: String,
     gateway_manager: State<'_, GatewayManager>,
 ) -> Result<(), String> {
-    gateway_manager.subscribe_guild(&account_id, &guild_id).await
+    gateway_manager
+        .subscribe_guild(&account_id, &guild_id)
+        .await
 }
 
 #[tauri::command]
@@ -1049,14 +1253,11 @@ pub async fn trigger_typing(
     let bucket = format!("typing:{}", channel_id);
     // Typing indicator lasts 10 seconds on Discord — send at most 1 per 8s per channel
     let (lim, win) = limits::TYPING;
-    // Use a simple rate check: don't fail if rate limited, just skip silently
-    rl.acquire(&bucket, lim, win).await;
-    let resp = client.post(&url).send().await.map_err(|e| e.to_string())?;
-    let _ = resp; // Typing is fire-and-forget: ignore non-success silently
-    Ok(())
+    rate_limited_post_empty(&client, &rl, &url, None, &bucket, lim, win).await
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_interaction(
     account_id: String,
     application_id: String,
@@ -1067,11 +1268,12 @@ pub async fn send_interaction(
     custom_id: String,
     component_type: u8,
     values: Option<Vec<String>>,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
-    let url = "https://discord.com/api/v9/interactions";
+    let url = "https://discord.com/api/v10/interactions";
 
     let mut data = serde_json::json!({
         "component_type": component_type,
@@ -1097,21 +1299,15 @@ pub async fn send_interaction(
         "data": data
     });
 
-    let resp = client.post(url)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if resp.status().is_success() {
-        Ok(serde_json::json!({ "status": "success" }))
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!("Falha ao enviar interação: {}", text))
-    }
+    let bucket = format!("interaction:{channel_id}");
+    rate_limited_post_empty(&client, &rl, url, Some(&payload), &bucket, 5, 5).await?;
+    Ok(serde_json::json!({ "status": "success" }))
 }
 
-pub(crate) fn get_token(account_id: &str, app: &tauri::AppHandle) -> Result<String, String> {
+pub(crate) fn get_token(
+    account_id: &str,
+    app: &tauri::AppHandle,
+) -> Result<Zeroizing<String>, String> {
     let accounts = load_accounts_from_store(app)?;
     let account = accounts
         .iter()
@@ -1119,6 +1315,7 @@ pub(crate) fn get_token(account_id: &str, app: &tauri::AppHandle) -> Result<Stri
         .ok_or("Conta não encontrada.")?;
 
     storage::decrypt_token(&account.token_encrypted)
+        .map(Zeroizing::new)
         .map_err(|e| format!("Erro ao descriptografar token: {}", e))
 }
 
@@ -1128,19 +1325,28 @@ pub async fn search_messages(
     guild_id: Option<String>,
     channel_id: Option<String>,
     query: String,
+    rl: State<'_, RateLimiter>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let token = get_token(&account_id, &app)?;
     let client = discord_client(&token)?;
 
     let url = if let Some(g) = guild_id {
-        format!("https://discord.com/api/v10/guilds/{}/messages/search?content={}", g, urlencoding::encode(&query))
+        format!(
+            "https://discord.com/api/v10/guilds/{}/messages/search?content={}",
+            g,
+            urlencoding::encode(&query)
+        )
     } else if let Some(c) = channel_id {
-        format!("https://discord.com/api/v10/channels/{}/messages/search?content={}", c, urlencoding::encode(&query))
+        format!(
+            "https://discord.com/api/v10/channels/{}/messages/search?content={}",
+            c,
+            urlencoding::encode(&query)
+        )
     } else {
         return Err("Must provide guild_id or channel_id".into());
     };
 
-    retry_get(&client, &url).await
+    let (limit, window) = limits::GENERAL_GET;
+    rate_limited_get(&client, &rl, &url, "message-search", limit, window).await
 }
-

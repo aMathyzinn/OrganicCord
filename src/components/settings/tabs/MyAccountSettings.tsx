@@ -1,18 +1,20 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { useAccountStore } from "@/stores/accountStore";
 import { useNavigationStore } from "@/stores/navigationStore";
-import { getAuthSessions, revokeAuthSession, fetchUserProfile, updateUserProfile, getSelfProfile } from "@/lib/tauri";
+import { getAuthSessions, revokeAuthSession, fetchUserProfile, updateUserProfile, getSelfProfile, selectProfileImage, type UpdateProfileParams } from "@/lib/tauri";
+import type { DiscordAuthSession, DiscordUserProfile } from "@/types";
 import { Avatar } from "@/components/ui/Avatar";
+import { ProfileCustomizationModal } from "@/components/profile/ProfileCustomizationModal";
 import { getBannerUrl } from "@/lib/utils";
-import { Monitor, Smartphone, Loader2, X, Upload, Trash2, Paintbrush, Check, AlertCircle, Sparkles, User, FileText, Zap } from "lucide-react";
+import { Monitor, Smartphone, Loader2, X, Upload, Trash2, Check, AlertCircle, Sparkles, Zap } from "lucide-react";
 
 export function MyAccountSettings() {
   const { accounts, logoutAccount, updateAccountInfo } = useAccountStore();
   const { activeAccountId } = useNavigationStore();
   
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<DiscordAuthSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
-  const [profileData, setProfileData] = useState<any>(null);
+  const [profileData, setProfileData] = useState<DiscordUserProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
 
   // Profile Edit Modal State
@@ -33,9 +35,6 @@ export function MyAccountSettings() {
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const avatarInputRef = useRef<HTMLInputElement>(null);
-  const bannerInputRef = useRef<HTMLInputElement>(null);
-
   const currentAccount = accounts.find(a => a.id === activeAccountId);
 
   // Load Sessions and User Profile Data
@@ -43,11 +42,11 @@ export function MyAccountSettings() {
     if (activeAccountId && currentAccount) {
       setLoadingSessions(true);
       getAuthSessions(activeAccountId)
-        .then((data: any) => {
-           if (data && Array.isArray(data.user_sessions)) {
-             setSessions(data.user_sessions);
-           } else if (Array.isArray(data)) {
+        .then((data) => {
+           if (Array.isArray(data)) {
              setSessions(data);
+           } else if (Array.isArray(data.user_sessions)) {
+             setSessions(data.user_sessions);
            }
         })
         .catch(console.error)
@@ -92,7 +91,7 @@ export function MyAccountSettings() {
   const bannerHash = profileData?.user_profile?.banner || profileData?.user?.banner || currentAccount.banner;
   const accentColorNum = profileData?.user_profile?.accent_color ?? profileData?.user?.accent_color ?? currentAccount.accent_color;
   const accentColorHex = accentColorNum ? `#${accentColorNum.toString(16).padStart(6, '0')}` : (currentAccount.color || "#5865f2");
-  const rawBannerUrl = getBannerUrl(currentAccount.user_id, bannerHash, 600);
+  const rawBannerUrl = getBannerUrl(currentAccount.user_id, bannerHash ?? null, 600);
   // Banner de imagem só é exibido se o usuário possui Nitro
   const bannerUrl = hasNitro ? rawBannerUrl : null;
   const userBio = profileData?.user_profile?.bio || profileData?.user?.bio || currentAccount.bio || "";
@@ -111,33 +110,25 @@ export function MyAccountSettings() {
     setIsEditingProfile(true);
   };
 
-  // Convert File to Data URL
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: "avatar" | "banner") => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const selectImage = async (type: "avatar" | "banner") => {
     if (type === "banner" && !hasNitro) {
       setSaveError("Banners de imagem personalizados exigem assinatura ativa do Discord Nitro.");
       return;
     }
-
-    if (file.size > 8 * 1024 * 1024) {
-      setSaveError("A imagem excede o tamanho máximo de 8MB.");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
+    setSaveError("");
+    try {
+      const image = await selectProfileImage();
+      if (!image) return;
       if (type === "avatar") {
-        setNewAvatarData(result);
-        setAvatarPreviewUrl(result);
+        setNewAvatarData(image.dataUrl);
+        setAvatarPreviewUrl(image.dataUrl);
       } else {
-        setNewBannerData(result);
-        setBannerPreviewUrl(result);
+        setNewBannerData(image.dataUrl);
+        setBannerPreviewUrl(image.dataUrl);
       }
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Não foi possível selecionar a imagem.");
+    }
   };
 
   // Save Profile Changes
@@ -155,7 +146,7 @@ export function MyAccountSettings() {
         if (isNaN(accentColorInt)) accentColorInt = undefined;
       }
 
-      const payload: any = {
+      const payload: UpdateProfileParams = {
         global_name: editGlobalName.trim() || null,
         bio: editBio.trim() || null,
       };
@@ -183,7 +174,7 @@ export function MyAccountSettings() {
       });
 
       // Update local profile state
-      setProfileData((prev: any) => ({
+      setProfileData((prev) => ({
         ...prev,
         user: {
           ...prev?.user,
@@ -201,9 +192,15 @@ export function MyAccountSettings() {
       setTimeout(() => {
         setIsEditingProfile(false);
       }, 800);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[MyAccount] Error updating profile:", err);
-      setSaveError(typeof err === "string" ? err : err?.message || "Falha ao atualizar o perfil no Discord.");
+      setSaveError(
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+            ? err.message
+            : "Falha ao atualizar o perfil no Discord."
+      );
     } finally {
       setSavingProfile(false);
     }
@@ -461,26 +458,10 @@ export function MyAccountSettings() {
         </div>
       </div>
 
-      {/* Hidden File Inputs for Avatar & Banner */}
-      <input 
-        type="file" 
-        ref={avatarInputRef} 
-        style={{ display: "none" }} 
-        accept="image/png,image/jpeg,image/gif,image/webp" 
-        onChange={(e) => handleFileChange(e, "avatar")} 
-      />
-      <input 
-        type="file" 
-        ref={bannerInputRef} 
-        style={{ display: "none" }} 
-        accept="image/png,image/jpeg,image/gif,image/webp" 
-        onChange={(e) => handleFileChange(e, "banner")} 
-      />
-
       {/* ============================================================ */}
       {/* EDIT PROFILE MODAL (PERSONALIZAÇÃO DE PERFIL)                */}
       {/* ============================================================ */}
-      {isEditingProfile && (
+      {currentAccount && false && isEditingProfile && (
         <div style={{
           position: "fixed",
           inset: 0,
@@ -544,7 +525,7 @@ export function MyAccountSettings() {
                     type="text"
                     value={editGlobalName}
                     onChange={(e) => setEditGlobalName(e.target.value)}
-                    placeholder={currentAccount.username}
+                    placeholder={currentAccount!.username}
                     maxLength={32}
                     style={{
                       width: "100%",
@@ -595,7 +576,7 @@ export function MyAccountSettings() {
                   </label>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button
-                      onClick={() => avatarInputRef.current?.click()}
+                      onClick={() => void selectImage("avatar")}
                       style={{
                         background: "var(--brand-500)",
                         color: "#fff",
@@ -612,7 +593,7 @@ export function MyAccountSettings() {
                     >
                       <Upload size={14} /> Trocar Foto
                     </button>
-                    {(newAvatarData !== null || currentAccount.avatar) && (
+                    {(newAvatarData !== null || currentAccount!.avatar) && (
                       <button
                         onClick={() => {
                           setNewAvatarData("");
@@ -680,7 +661,7 @@ export function MyAccountSettings() {
                           setSaveError("Banners de imagem personalizados exigem assinatura ativa do Discord Nitro.");
                           return;
                         }
-                        bannerInputRef.current?.click();
+                        void selectImage("banner");
                       }}
                       style={{
                         background: hasNitro ? "var(--brand-500)" : "var(--bg-tertiary)",
@@ -730,20 +711,7 @@ export function MyAccountSettings() {
                     Cor do Banner (Accent Color)
                   </label>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <input
-                      type="color"
-                      value={editAccentColor}
-                      onChange={(e) => setEditAccentColor(e.target.value)}
-                      style={{
-                        width: 40,
-                        height: 40,
-                        padding: 0,
-                        border: "none",
-                        borderRadius: "var(--radius-sm)",
-                        cursor: "pointer",
-                        background: "none"
-                      }}
-                    />
+                    <span aria-hidden="true" style={{ width: 40, height: 40, border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-sm)", background: editAccentColor, flexShrink: 0 }} />
                     <input
                       type="text"
                       value={editAccentColor}
@@ -802,16 +770,16 @@ export function MyAccountSettings() {
                       height: 80
                     }}>
                       {avatarPreviewUrl ? (
-                        <img src={avatarPreviewUrl} alt="Avatar preview" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+                        <img src={avatarPreviewUrl!} alt="Avatar preview" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
                       ) : newAvatarData === "" ? (
                         <div style={{ width: "100%", height: "100%", background: "var(--brand-500)", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 28, borderRadius: "50%" }}>
-                          {currentAccount.username[0]?.toUpperCase()}
+                          {currentAccount!.username[0]?.toUpperCase()}
                         </div>
                       ) : (
                         <Avatar
-                          userId={currentAccount.user_id}
-                          avatarHash={currentAccount.avatar}
-                          username={currentAccount.username}
+                          userId={currentAccount!.user_id}
+                          avatarHash={currentAccount!.avatar}
+                          username={currentAccount!.username}
                           size={80}
                           square={false}
                         />
@@ -820,10 +788,10 @@ export function MyAccountSettings() {
 
                     <div style={{ marginTop: 42 }}>
                       <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text-normal)" }}>
-                        {editGlobalName.trim() || currentAccount.username}
+                        {editGlobalName.trim() || currentAccount!.username}
                       </div>
                       <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
-                        {currentAccount.username}
+                        {currentAccount!.username}
                       </div>
 
                       {editBio.trim() && (
@@ -918,6 +886,33 @@ export function MyAccountSettings() {
             </div>
           </div>
         </div>
+      )}
+      {isEditingProfile && (
+        <ProfileCustomizationModal
+          account={currentAccount}
+          hasNitro={hasNitro}
+          bannerUrl={bannerUrl}
+          bannerHash={bannerHash}
+          avatarPreviewUrl={avatarPreviewUrl}
+          bannerPreviewUrl={bannerPreviewUrl}
+          newAvatarData={newAvatarData}
+          newBannerData={newBannerData}
+          editGlobalName={editGlobalName}
+          editBio={editBio}
+          editAccentColor={editAccentColor}
+          saving={savingProfile}
+          saveError={saveError}
+          saveSuccess={saveSuccess}
+          onSelectAvatar={() => void selectImage("avatar")}
+          onSelectBanner={() => void selectImage("banner")}
+          onClose={() => setIsEditingProfile(false)}
+          onSave={handleSaveProfile}
+          onGlobalNameChange={setEditGlobalName}
+          onBioChange={setEditBio}
+          onAccentColorChange={setEditAccentColor}
+          onRemoveAvatar={() => { setNewAvatarData(""); setAvatarPreviewUrl(null); }}
+          onRemoveBanner={() => { setNewBannerData(""); setBannerPreviewUrl(null); }}
+        />
       )}
     </div>
   );

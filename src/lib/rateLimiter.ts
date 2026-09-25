@@ -79,7 +79,7 @@ export const CLIENT_LIMITS = {
  * Creates a debounced function that delays invoking `fn` until after
  * `delayMs` milliseconds have passed since the last call.
  */
-export function debounce<T extends (...args: any[]) => any>(
+export function debounce<T extends (...args: never[]) => unknown>(
   fn: T,
   delayMs: number
 ): (...args: Parameters<T>) => void {
@@ -97,7 +97,7 @@ export function debounce<T extends (...args: any[]) => any>(
  * Creates a throttled function that fires at most once per `intervalMs`.
  * Returns the last call's arguments when it fires.
  */
-export function throttle<T extends (...args: any[]) => any>(
+export function throttle<T extends (...args: never[]) => unknown>(
   fn: T,
   intervalMs: number
 ): (...args: Parameters<T>) => void {

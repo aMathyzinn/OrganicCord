@@ -1,7 +1,10 @@
 {
   "name": "organic-cord",
-  "version": "0.1.5",
+  "version": "0.2.0-beta.1",
   "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "start": "npm run tauri:dev",
     "dev": "vite",
@@ -10,11 +13,10 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "lint": "eslint src --ext .ts,.tsx",
+    "lint": "eslint src --max-warnings 0",
     "type-check": "tsc --noEmit",
-    "ai:enable": "node scripts/ai-manager.js enable",
-    "ai:disable": "node scripts/ai-manager.js disable",
-    "build:public": "npm run ai:disable && npm run build && npm run tauri:build",
+    "test": "vitest run",
+    "build:public": "npm run tauri:build",
     "prepare": "husky"
   },
   "dependencies": {
@@ -27,8 +29,7 @@
     "@radix-ui/react-scroll-area": "^1.2.0",
     "@radix-ui/react-tooltip": "^1.1.3",
     "@tauri-apps/api": "^2.1.1",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-notification": "^2.0.0",
+    "@tauri-apps/plugin-notification": "^2.4.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "@tauri-apps/plugin-store": "^2.0.0",
     "clsx": "^2.1.1",
@@ -39,7 +40,6 @@
     "lucide-static": "^1.21.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.2",
     "react-virtualized-auto-sizer": "^1.0.24",
     "react-window": "^1.8.10",
     "ws": "^8.21.0",
@@ -52,10 +52,12 @@
     "@types/react-window": "^1.8.8",
     "@typescript-eslint/eslint-plugin": "^8.8.1",
     "@typescript-eslint/parser": "^8.8.1",
-    "@vitejs/plugin-react": "^4.3.2",
+    "@vitejs/plugin-react": "^6.1.1",
+    "esbuild": "^0.28.2",
     "eslint": "^9.11.1",
     "husky": "^9.1.7",
     "typescript": "^5.6.3",
-    "vite": "^5.4.8"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
   }
 }

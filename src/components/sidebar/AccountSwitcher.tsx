@@ -31,18 +31,6 @@ const PRESENCE_OPTIONS: { value: PresenceStatus; label: string; color: string }[
   { value: "invisible", label: "Invisível",     color: "var(--status-offline)" },
 ];
 
-function statusColor(s: ReturnType<typeof sessionToDisplayStatus>): string {
-  switch (s) {
-    case "online":     return "var(--status-online)";
-    case "idle":       return "var(--status-idle)";
-    case "dnd":        return "var(--status-dnd)";
-    case "invisible":  return "var(--status-offline)";
-    case "connecting": return "var(--status-idle)";
-    case "error":      return "var(--status-dnd)";
-    default:           return "var(--status-offline)";
-  }
-}
-
 function statusLabel(s: ReturnType<typeof sessionToDisplayStatus>): string {
   switch (s) {
     case "online":     return "Online";

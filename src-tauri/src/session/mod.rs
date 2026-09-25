@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SessionStatus {
@@ -38,8 +38,46 @@ pub struct StoredAccount {
     pub color: String,
 }
 
+/// Safe account representation exposed through Tauri commands and events.
+/// Authentication material must never cross back into the webview process.
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicAccount {
+    pub id: String,
+    pub username: String,
+    pub discriminator: String,
+    pub user_id: String,
+    pub avatar: Option<String>,
+    pub added_at: DateTime<Utc>,
+    pub last_used: Option<DateTime<Utc>>,
+    pub color: String,
+}
+
+impl From<&StoredAccount> for PublicAccount {
+    fn from(account: &StoredAccount) -> Self {
+        Self {
+            id: account.id.clone(),
+            username: account.username.clone(),
+            discriminator: account.discriminator.clone(),
+            user_id: account.user_id.clone(),
+            avatar: account.avatar.clone(),
+            added_at: account.added_at,
+            last_used: account.last_used,
+            color: account.color.clone(),
+        }
+    }
+}
+
 pub struct SessionManager {
     pub sessions: Arc<Mutex<HashMap<String, AccountSession>>>,
+}
+
+fn lock_sessions(
+    sessions: &Mutex<HashMap<String, AccountSession>>,
+) -> MutexGuard<'_, HashMap<String, AccountSession>> {
+    sessions.lock().unwrap_or_else(|poisoned| {
+        log::error!("[session] recovering from a poisoned session lock");
+        poisoned.into_inner()
+    })
 }
 
 impl SessionManager {
@@ -50,22 +88,22 @@ impl SessionManager {
     }
 
     pub fn add_session(&self, session: AccountSession) {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = lock_sessions(&self.sessions);
         sessions.insert(session.account_id.clone(), session);
     }
 
     pub fn remove_session(&self, account_id: &str) {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = lock_sessions(&self.sessions);
         sessions.remove(account_id);
     }
 
     pub fn get_session(&self, account_id: &str) -> Option<AccountSession> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = lock_sessions(&self.sessions);
         sessions.get(account_id).cloned()
     }
 
     pub fn update_status(&self, account_id: &str, status: SessionStatus) {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = lock_sessions(&self.sessions);
         if let Some(session) = sessions.get_mut(account_id) {
             session.status = status;
             if matches!(session.status, SessionStatus::Connected) {
@@ -75,15 +113,10 @@ impl SessionManager {
         }
     }
 
-    pub fn list_sessions(&self) -> Vec<AccountSession> {
-        let sessions = self.sessions.lock().unwrap();
-        sessions.values().cloned().collect()
-    }
-
     /// Returns true if the session exists and was validated within the last `max_age` seconds.
     /// Use this before making API calls to avoid redundant re-validations.
     pub fn is_recently_validated(&self, account_id: &str, max_age_secs: i64) -> bool {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = lock_sessions(&self.sessions);
         if let Some(session) = sessions.get(account_id) {
             if session.status != SessionStatus::Connected {
                 return false;
@@ -94,15 +127,6 @@ impl SessionManager {
             }
         }
         false
-    }
-
-    /// Marks a session as needing re-validation (e.g. after a 401 response).
-    pub fn invalidate(&self, account_id: &str) {
-        let mut sessions = self.sessions.lock().unwrap();
-        if let Some(session) = sessions.get_mut(account_id) {
-            session.status = SessionStatus::Error("Token invalidated — please reconnect".into());
-            session.last_validated_at = None;
-        }
     }
 }
 
@@ -119,7 +143,7 @@ pub async fn validate_token(token: &str) -> Result<(), String> {
         .header("Authorization", token)
         .header(
             "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            concat!("OrganicCord/", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await

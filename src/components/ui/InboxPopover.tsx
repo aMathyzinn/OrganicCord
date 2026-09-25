@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Inbox, Bell, MessageSquare, AtSign, Check, X, Loader2 } from "lucide-react";
-import { useDiscordStore } from "@/stores/discordStore";
+import { Inbox, Bell, AtSign, Loader2 } from "lucide-react";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { getRecentMentions } from "@/lib/tauri";
 import { Avatar } from "@/components/ui/Avatar";
@@ -9,7 +8,6 @@ import { DiscordText } from "@/components/ui/DiscordText";
 import type { DiscordMessage } from "@/types";
 
 export function InboxPopover() {
-  const { cache, clearUnread } = useDiscordStore();
   const { activeAccountId, setActiveGuild, setActiveChannel, setView } = useNavigationStore();
   
   const [open, setOpen] = useState(false);
@@ -28,12 +26,6 @@ export function InboxPopover() {
 
   const hasMentions = mentions.length > 0;
   const totalMentions = mentions.length; // Count of fetched unread mentions
-
-  const handleMarkAsRead = (channelId: string) => {
-    if (activeAccountId) {
-      clearUnread(activeAccountId, channelId);
-    }
-  };
 
   const handleGoToChannel = (channelId: string, guildId?: string) => {
     if (guildId) {

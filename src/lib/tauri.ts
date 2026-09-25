@@ -9,6 +9,15 @@ import type {
   DiscordDM,
   DiscordUser,
   DiscordRelationship,
+  DiscordMember,
+  DiscordPresence,
+  DiscordUserProfile,
+  DiscordInvite,
+  DiscordForumThreadsResponse,
+  DiscordThread,
+  DiscordAuthSession,
+  DiscordAuthSessionsResponse,
+  DiscordMessageSearchResponse,
 } from "@/types";
 
 // --- Account commands ---
@@ -27,6 +36,9 @@ export const validateToken = (token: string) =>
 
 export const startDiscordLogin = () =>
   invoke<void>("start_discord_login");
+
+export const cancelDiscordLogin = () =>
+  invoke<void>("cancel_discord_login");
 
 export const getAccountInfo = (accountId: string) =>
   invoke<DiscordUser>("get_account_info", { accountId });
@@ -59,23 +71,26 @@ export const removeRelationship = (accountId: string, userId: string) =>
 export const blockUser = (accountId: string, userId: string) =>
   invoke<void>("block_user", { accountId, userId });
 
-export const setUserNote = (accountId: string, userId: string, note: String) =>
+export const setUserNote = (accountId: string, userId: string, note: string) =>
   invoke<void>("set_user_note", { accountId, userId, note });
 
 export const createChannelInvite = (accountId: string, channelId: string) =>
-  invoke<any>("create_channel_invite", { accountId, channelId });
+  invoke<DiscordInvite>("create_channel_invite", { accountId, channelId });
 
 export const getGatewayPresences = (accountId: string) =>
-  invoke<any[]>("get_gateway_presences", { accountId });
+  invoke<DiscordPresence[]>("get_gateway_presences", { accountId });
 
 export const fetchUserProfile = (accountId: string, userId: string) =>
-  invoke<any>("fetch_user_profile", { accountId, userId });
+  invoke<DiscordUserProfile>("fetch_user_profile", { accountId, userId });
 
 export const getChannels = (accountId: string, guildId: string) =>
   invoke<DiscordChannel[]>("get_channels", { accountId, guildId });
 
+export const getCurrentGuildMember = (accountId: string, guildId: string) =>
+  invoke<DiscordMember>("get_current_guild_member", { accountId, guildId });
+
 export const getForumThreads = (accountId: string, channelId: string, guildId: string) =>
-  invoke<any>("get_forum_threads", { accountId, channelId, guildId });
+  invoke<DiscordForumThreadsResponse>("get_forum_threads", { accountId, channelId, guildId });
 
 export const createForumPost = (
   accountId: string,
@@ -83,23 +98,23 @@ export const createForumPost = (
   title: string,
   content: string,
   appliedTags: string[]
-) => invoke<any>("create_forum_post", { accountId, channelId, title, content, appliedTags });
+) => invoke<DiscordThread>("create_forum_post", { accountId, channelId, title, content, appliedTags });
 
 export const getRecentMentions = (accountId: string) =>
   invoke<DiscordMessage[]>("get_recent_mentions", { accountId });
 
 export const getAuthSessions = (accountId: string) =>
-  invoke<any>("get_auth_sessions", { accountId });
+  invoke<DiscordAuthSessionsResponse | DiscordAuthSession[]>("get_auth_sessions", { accountId });
 
 export const revokeAuthSession = (accountId: string, sessionIdHash: string) =>
-  invoke<any>("revoke_auth_session", { accountId, sessionIdHash });
+  invoke<void>("revoke_auth_session", { accountId, sessionIdHash });
 
 export const searchMessages = (
   accountId: string,
   query: string,
   guildId?: string,
   channelId?: string
-) => invoke<any>("search_messages", { accountId, query, guildId: guildId ?? null, channelId: channelId ?? null });
+) => invoke<DiscordMessageSearchResponse>("search_messages", { accountId, query, guildId: guildId ?? null, channelId: channelId ?? null });
 
 
 export const getMessages = (
@@ -188,7 +203,7 @@ export const sendMessageWithAttachment = (
   content: string,
   replyTo: string | undefined,
   fileName: string,
-  filePath?: string,
+  fileHandle?: string,
   fileData?: Uint8Array
 ) => invoke<DiscordMessage>("send_message_with_attachment", {
   accountId,
@@ -196,9 +211,25 @@ export const sendMessageWithAttachment = (
   content,
   replyTo,
   fileName,
-  filePath: filePath ?? null,
+  fileHandle: fileHandle ?? null,
   fileData: fileData ? Array.from(fileData) : null
 });
+
+export interface SelectedAttachment {
+  handle: string;
+  name: string;
+  size: number;
+}
+
+export const selectAttachment = () =>
+  invoke<SelectedAttachment | null>("select_attachment");
+
+export interface SelectedProfileImage {
+  dataUrl: string;
+}
+
+export const selectProfileImage = () =>
+  invoke<SelectedProfileImage | null>("select_profile_image");
 
 export const getDMs = (accountId: string) =>
   invoke<DiscordDM[]>("get_dms", { accountId });
@@ -207,7 +238,7 @@ export const createDM = (accountId: string, recipientId: string) =>
   invoke<DiscordDM>("create_dm", { accountId, recipientId });
 
 export const closeDM = (accountId: string, channelId: string) =>
-  invoke<any>("close_dm", { accountId, channelId });
+  invoke<void>("close_dm", { accountId, channelId });
 
 export const getPinnedMessages = (accountId: string, channelId: string) =>
   invoke<DiscordMessage[]>("get_pinned_messages", { accountId, channelId });
@@ -292,6 +323,83 @@ export const gatewayDisconnect = (accountId: string) =>
 
 export const gatewayGetStatus = (accountId: string) =>
   invoke<string | null>("gateway_get_status", { accountId });
+
+export const gatewaySetGameActivity = (
+  accountId: string,
+  game?: { name: string; startedAt: number } | null,
+) =>
+  invoke<void>("gateway_set_game_activity", {
+    accountId,
+    name: game?.name ?? null,
+    startedAt: game?.startedAt ?? null,
+  });
+
+// --- Registered games / local activity detection ---
+
+export interface RegisteredGame {
+  id: string;
+  executable: string;
+  name: string;
+  enabled: boolean;
+}
+
+export interface GameDetectionSettings {
+  enabled: boolean;
+  games: RegisteredGame[];
+}
+
+export interface DetectedGame {
+  id: string;
+  name: string;
+  executable: string;
+  processId: string;
+  startedAt: number;
+}
+
+export const gameDetectionGetSettings = () =>
+  invoke<GameDetectionSettings>("game_detection_get_settings");
+
+export const gameDetectionSetEnabled = (enabled: boolean) =>
+  invoke<GameDetectionSettings>("game_detection_set_enabled", { enabled });
+
+export const gameDetectionUpdateGame = (game: RegisteredGame) =>
+  invoke<GameDetectionSettings>("game_detection_update_game", { game });
+
+export const gameDetectionRemoveGame = (gameId: string) =>
+  invoke<GameDetectionSettings>("game_detection_remove_game", { gameId });
+
+export const gameDetectionScan = () =>
+  invoke<DetectedGame | null>("game_detection_scan");
+
+// --- Official Discord desktop Rich Presence (local RPC) ---
+
+export interface DiscordRpcSettings {
+  enabled: boolean;
+  applicationId: string;
+}
+
+export interface DiscordRpcStatus {
+  connected: boolean;
+  message: string;
+}
+
+export const discordRpcGetSettings = () =>
+  invoke<DiscordRpcSettings>("discord_rpc_get_settings");
+
+export const discordRpcUpdateSettings = (settings: DiscordRpcSettings) =>
+  invoke<DiscordRpcSettings>("discord_rpc_update_settings", { settings });
+
+export const discordRpcPublishGame = (game: { name: string; startedAt: number }) =>
+  invoke<DiscordRpcStatus>("discord_rpc_publish_game", {
+    name: game.name,
+    startedAt: game.startedAt,
+  });
+
+export const discordRpcClearGame = () =>
+  invoke<void>("discord_rpc_clear_game");
+
+export const discordRpcTest = () =>
+  invoke<DiscordRpcStatus>("discord_rpc_test");
 
 // --- QR Login commands ---
 

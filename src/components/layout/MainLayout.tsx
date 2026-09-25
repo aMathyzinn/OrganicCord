@@ -1,8 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
-import { useAiConversationStore } from "@/stores/aiConversationStore";
-import { useAccountStore } from "@/stores/accountStore";
 import { useArchiveStore } from "@/stores/archiveStore";
 import { GuildSidebar } from "@/components/sidebar/GuildSidebar";
 import { ChannelSidebar } from "@/components/sidebar/ChannelSidebar";
@@ -11,12 +9,14 @@ import { DMArea } from "@/components/chat/DMArea";
 import { WelcomePlaceholder } from "@/components/chat/WelcomePlaceholder";
 import { FriendsArea } from "@/components/friends/FriendsArea";
 import { ForumArea } from "@/components/chat/ForumArea";
-import { AiConversationPanel } from "@/components/ai/AiConversationPanel";
 import { SettingsOverlay } from "@/components/settings/SettingsOverlay";
 import { Avatar } from "@/components/ui/Avatar";
 import { UserContextMenu } from "@/components/ui/UserContextMenu";
 import { Search, X, Gamepad2, Archive } from "lucide-react";
 import { UserBottomBar } from "@/components/sidebar/UserBottomBar";
+import { VoicePanel } from "@/components/voice/VoicePanel";
+import { ScreenShareStage } from "@/components/voice/ScreenShareStage";
+import { useVoiceStore } from "@/stores/voiceStore";
 import type { DiscordDM } from "@/types";
 
 interface Props {
@@ -25,18 +25,27 @@ interface Props {
 
 export function MainLayout({ onAddAccount }: Props) {
   const { view, activeGuildId, activeChannelId, activeAccountId } = useNavigationStore();
-  const { conversations, runtimeStatus } = useAiConversationStore();
-  const { stealthMode } = useAccountStore();
   const { fetchDMs, cache } = useDiscordStore();
-
-  const hasConvsInChannel = activeChannelId
-    ? conversations.some((c: any) => c.channel_id === activeChannelId)
-    : false;
+  const {
+    accountId: voiceAccountId,
+    channelId: voiceChannelId,
+    screenShareStatus,
+    screenShareViewOpen,
+  } = useVoiceStore();
 
   const activeChannel = activeGuildId && activeChannelId 
-    ? cache.channels[activeGuildId]?.find(c => c.id === activeChannelId) 
+    ? cache.channels[activeAccountId ?? ""]?.[activeGuildId]?.find(c => c.id === activeChannelId)
     : null;
   const isForum = activeChannel?.channel_type === 15;
+  const activeDm = activeAccountId && activeChannelId
+    ? cache.dms[activeAccountId]?.find((dm) => dm.id === activeChannelId)
+    : undefined;
+  const screenShareRecipient = activeChannelId === voiceChannelId
+    ? activeDm?.recipients?.[0]
+    : undefined;
+  const showScreenShareStage = screenShareViewOpen
+    && screenShareStatus !== "idle"
+    && voiceAccountId === activeAccountId;
 
   return (
     <div
@@ -80,13 +89,16 @@ export function MainLayout({ onAddAccount }: Props) {
             activeGuildId && <ChannelSidebar guildId={activeGuildId} />
           )}
         </div>
+        <VoicePanel />
         <UserBottomBar onAddAccount={onAddAccount} />
       </div>
 
       {/* Coluna 3: Área principal de conteúdo */}
       <div style={{ flex: 1, overflow: "hidden", background: "var(--bg-primary)", display: "flex" }}>
         <div style={{ flex: 1, overflow: "hidden" }}>
-          {activeChannelId && activeAccountId ? (
+          {showScreenShareStage ? (
+            <ScreenShareStage recipient={screenShareRecipient} allowClose />
+          ) : activeChannelId && activeAccountId ? (
             view === "dms" ? (
               <DMArea channelId={activeChannelId} accountId={activeAccountId} />
             ) : isForum && activeGuildId ? (
@@ -101,10 +113,6 @@ export function MainLayout({ onAddAccount }: Props) {
           )}
         </div>
 
-        {/* Coluna 4: Painel de IA */}
-        {hasConvsInChannel && activeChannelId && !stealthMode && (
-          <AiConversationPanel channelId={activeChannelId} />
-        )}
       </div>
 
       <SettingsOverlay />
@@ -272,11 +280,11 @@ function DMSidebarList({ accountId, searchQuery }: { accountId: string; searchQu
                   username={recipient.username}
                   size={32}
                   showStatus={true}
-                  status={(cache.presences[accountId]?.[recipient.id]?.status as any) || "offline"}
+                  status={cache.presences[accountId]?.[recipient.id]?.status || "offline"}
                 />
                 {(() => {
                   const presence = cache.presences[accountId]?.[recipient.id];
-                  const activities = presence?.activities?.filter((a: any) => a.type !== 4) || [];
+                  const activities = presence?.activities?.filter((activity) => activity.type !== 4) || [];
                   const mainActivity = activities[0];
                   
                   return (

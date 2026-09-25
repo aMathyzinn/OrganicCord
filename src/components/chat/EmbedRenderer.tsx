@@ -270,7 +270,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
             marginTop: 4,
             cursor: "pointer",
           }}
-          onClick={() => window.open(embed.image!.url, "_blank")}
+          onClick={() => useExternalLinkStore.getState().openExternalLink(embed.image!.url)}
         />
       )}
 

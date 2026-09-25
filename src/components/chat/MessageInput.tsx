@@ -1,21 +1,26 @@
-import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent } from "react";
+import { lazy, Suspense, useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent } from "react";
 import type { DiscordMessage } from "@/types";
 import { getDisplayName } from "@/lib/utils";
-import { Reply, X, Plus, File as FileIcon, Smile, Mic, Trash2, Send, Play, Pause } from "lucide-react";
-import EmojiPicker, { Theme, EmojiClickData, Categories } from "emoji-picker-react";
+import { Reply, X, Plus, File as FileIcon, Smile, Mic, Trash2, Send } from "lucide-react";
+import type { EmojiClickData } from "emoji-picker-react";
 import * as Popover from "@radix-ui/react-popover";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
 import { OrganicMark } from "@/components/ui/OrganicMark";
 import { DiscordEmojiPicker } from "./DiscordEmojiPicker";
 
-import { open } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { toast } from "@/components/ui/Toast";
 import { listen } from "@tauri-apps/api/event";
+import { selectAttachment } from "@/lib/tauri";
+import { invoke } from "@tauri-apps/api/core";
+
+const EmojiPickerPanel = lazy(() =>
+  import("./EmojiPickerPanel").then((module) => ({ default: module.EmojiPickerPanel })),
+);
 
 export type AttachmentData = 
   | { type: "file", file: File }
-  | { type: "path", path: string, name: string, size: number, mime: string };
+  | { type: "handle", handle: string, name: string, size: number };
 
 interface Props {
   channelId: string;
@@ -23,6 +28,8 @@ interface Props {
   onCancelReply: () => void;
   onSend: (content: string, attachment?: AttachmentData) => Promise<void>;
   accountColor?: string;
+  externalAttachment?: AttachmentData | null;
+  canAttach?: boolean;
 }
 
 // ─── Helpers de Emoji Customizado ─────────────────────────────────────────────
@@ -70,6 +77,8 @@ export function MessageInput({
   onCancelReply,
   onSend,
   accountColor = "var(--brand-500)",
+  externalAttachment,
+  canAttach = true,
 }: Props) {
   const [isEmpty, setIsEmpty] = useState(true);
   const [sending, setSending] = useState(false);
@@ -77,6 +86,12 @@ export function MessageInput({
   const [attachment, setAttachment] = useState<AttachmentData | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (externalAttachment) {
+      setAttachment(externalAttachment);
+    }
+  }, [externalAttachment]);
 
   const { activeAccountId } = useNavigationStore();
   const guildEmojisRaw = useDiscordStore((s) => activeAccountId ? s.cache.guildEmojis[activeAccountId] : null);
@@ -106,7 +121,7 @@ export function MessageInput({
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const recordTimerRef = useRef<any>(null);
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -177,7 +192,7 @@ export function MessageInput({
 
       // Web Audio level visualizer
       try {
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioCtx = new AudioContext();
         audioCtxRef.current = audioCtx;
         const source = audioCtx.createMediaStreamSource(stream);
         const analyser = audioCtx.createAnalyser();
@@ -198,7 +213,7 @@ export function MessageInput({
       }
     } catch (err) {
       console.error("[audio] Error accessing microphone:", err);
-      alert("Não foi possível acessar o microfone. Verifique as permissões de áudio do sistema.");
+      toast.error("Não foi possível acessar o microfone. Verifique a privacidade de áudio do Windows.");
     }
   };
 
@@ -240,7 +255,7 @@ export function MessageInput({
 
       let decodeCtx: AudioContext | null = null;
       try {
-        decodeCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        decodeCtx = new AudioContext();
         const decodedBuffer = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
         durationSecs = decodedBuffer.duration;
         const pcmData = decodedBuffer.getChannelData(0);
@@ -309,10 +324,9 @@ export function MessageInput({
   const handleEmojiClick = (emojiData: EmojiClickData) => {
     let toInsert = emojiData.emoji;
     if (emojiData.isCustom) {
-      const customEmoji = emojiData as any;
-      const isAnimated = customEmoji.imageUrl?.includes(".gif") || customEmoji.imgUrl?.includes(".gif");
-      const emojiName = emojiData.names?.[0] || customEmoji.name || "emoji";
-      toInsert = `<${isAnimated ? "a" : ""}:${emojiName}:${emojiData.unified || customEmoji.id}>`;
+      const isAnimated = emojiData.imageUrl.includes(".gif");
+      const emojiName = emojiData.names?.[0] || "emoji";
+      toInsert = `<${isAnimated ? "a" : ""}:${emojiName}:${emojiData.unified}>`;
     }
     insertEmojiString(toInsert);
     setPickerOpen(false);
@@ -369,9 +383,7 @@ export function MessageInput({
       const now = Date.now();
       if (now - lastTypingRef.current > 5000) {
         lastTypingRef.current = now;
-        import("@tauri-apps/api/core").then(({ invoke }) => {
-          invoke("trigger_typing", { accountId: activeAccountId, channelId }).catch(console.error);
-        });
+        invoke("trigger_typing", { accountId: activeAccountId, channelId }).catch(console.error);
       }
     }
   }, [channelId, activeAccountId]);
@@ -393,7 +405,7 @@ export function MessageInput({
     if (e.clipboardData.files && e.clipboardData.files.length > 0) {
       const file = e.clipboardData.files[0];
       if (file.size > 25 * 1024 * 1024) {
-        alert("Por favor, use o botão de anexo (+) para arquivos maiores que 25MB para otimização de memória.");
+        toast.warning("Arquivos acima de 25 MB não podem ser enviados pelo OrganicCord.");
         e.preventDefault();
         return;
       }
@@ -413,17 +425,17 @@ export function MessageInput({
   }, [updateStateFromEditable]);
 
   const handleAttachClick = async () => {
+    if (!canAttach) {
+      toast.error("Você não tem permissão para anexar arquivos neste canal.");
+      return;
+    }
     try {
-      const selected = await open({
-        multiple: false,
-        title: "Selecionar anexo",
-      });
-      if (selected && typeof selected === "string") {
-        const name = selected.split(/\\|\//).pop() || "Arquivo";
-        setAttachment({ type: "path", path: selected, name, size: 0, mime: "application/octet-stream" });
+      const selected = await selectAttachment();
+      if (selected) {
+        setAttachment({ type: "handle", ...selected });
       }
     } catch (err) {
-      console.error(err);
+      toast.error(String(err).replace(/^Error:\s*/, ""));
     }
   };
 
@@ -522,12 +534,6 @@ export function MessageInput({
                 alt="attachment"
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
-            ) : (attachment.type === "path" && (attachment.name.endsWith(".png") || attachment.name.endsWith(".jpg") || attachment.name.endsWith(".jpeg"))) ? (
-              <img
-                src={convertFileSrc(attachment.path)}
-                alt="attachment"
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              />
             ) : (
               <FileIcon size={24} color="var(--text-muted)" />
             )}
@@ -559,7 +565,9 @@ export function MessageInput({
               {attachment.type === "file" ? attachment.file.name : attachment.name}
             </div>
             <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-              {attachment.type === "file" ? (attachment.file.size / 1024 / 1024).toFixed(2) : "Arquivo Local"} MB
+              {(attachment.type === "file" ? attachment.file.size : attachment.size) / 1024 / 1024 < 0.01
+                ? "< 0.01"
+                : ((attachment.type === "file" ? attachment.file.size : attachment.size) / 1024 / 1024).toFixed(2)} MB
             </div>
           </div>
         </div>
@@ -686,26 +694,27 @@ export function MessageInput({
           <>
             <button
               onClick={handleAttachClick}
-              title="Enviar um arquivo"
+              title={canAttach ? "Enviar um arquivo" : "Sem permissão para anexar arquivos neste canal"}
               style={{
                 background: "var(--bg-tertiary)",
                 border: "none",
                 borderRadius: "50%",
                 width: 32,
                 height: 32,
-                cursor: "pointer",
+                cursor: canAttach ? "pointer" : "not-allowed",
+                opacity: canAttach ? 1 : 0.4,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 flexShrink: 0,
                 color: "var(--text-normal)",
-                transition: "background 150ms",
+                transition: "all 150ms",
                 marginTop: 6,
                 marginBottom: 6,
               }}
-              className="hover-bg-modifier-selected"
+              className={canAttach ? "hover-bg-modifier-selected" : undefined}
             >
-              <Plus size={18} />
+              <Plus size={16} />
             </button>
 
             {/* ContentEditable Visual Emoji Input */}
@@ -826,16 +835,15 @@ export function MessageInput({
                 </Popover.Trigger>
                 <Popover.Portal>
                   <Popover.Content side="top" align="end" sideOffset={10} style={{ zIndex: 100 }}>
-                    <EmojiPicker
-                      onEmojiClick={handleEmojiClick}
-                      theme={Theme.DARK}
-                      lazyLoadEmojis={true}
-                      searchPlaceHolder="Pesquisar emoji..."
-                      customEmojis={customEmojis}
-                      categoryIcons={{
-                        [Categories.CUSTOM]: <OrganicMark size={16} />
-                      }}
-                    />
+                    <Suspense fallback={<div style={{ width: 350, height: 450 }} />}>
+                      <EmojiPickerPanel
+                        onEmojiClick={handleEmojiClick}
+                        lazyLoadEmojis={true}
+                        searchPlaceHolder="Pesquisar emoji..."
+                        customEmojis={customEmojis}
+                        customCategoryIcon={<OrganicMark size={16} />}
+                      />
+                    </Suspense>
                   </Popover.Content>
                 </Popover.Portal>
               </Popover.Root>

@@ -7,6 +7,7 @@ import { useProfileStore } from "@/stores/profileStore";
 import { useDiscordStore } from "@/stores/discordStore";
 import { Loader2, Gamepad2 } from "lucide-react";
 import { DiscordText } from "@/components/ui/DiscordText";
+import type { DiscordUserProfile } from "@/types";
 
 export function UserProfilePopover({
   userId,
@@ -16,7 +17,7 @@ export function UserProfilePopover({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
+  const [profile, setProfile] = useState<DiscordUserProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const { activeAccountId } = useNavigationStore();
   const { openProfile } = useProfileStore();
@@ -127,7 +128,7 @@ export function UserProfilePopover({
 
                 {profile.badges && profile.badges.length > 0 && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", paddingBottom: 12, borderBottom: "1px solid var(--border-subtle)" }}>
-                    {profile.badges.map((b: any) => {
+                    {profile.badges.map((b) => {
                       const ext = b.icon.startsWith("a_") ? "gif" : "png";
                       return (
                         <img 

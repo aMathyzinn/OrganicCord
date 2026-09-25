@@ -1,4 +1,4 @@
-import type { DiscordChannel } from "@/types";
+import type { DiscordChannel, DiscordRole } from "@/types";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useExternalLinkStore } from "@/stores/externalLinkStore";
@@ -53,7 +53,7 @@ export function MessageContent({ content, channels = [], embed = false, highligh
 
   if (!content) return null;
   const channelMap = new Map(channels.map((c) => [c.id, c.name ?? c.id]));
-  const roleMap = new Map((roles || []).map((r: any) => [String(r.id), r]));
+  const roleMap = new Map((roles || []).map((role) => [role.id, role]));
 
   const nodes = parseMarkdown(content, channelMap, roleMap);
   const jumbo = !embed && isJumboEmoji(nodes);
@@ -318,7 +318,7 @@ function isJumboEmoji(nodes: Node[]): boolean {
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
-function parseMarkdown(input: string, channelMap: Map<string, string>, roleMap: Map<string, any>): Node[] {
+function parseMarkdown(input: string, channelMap: Map<string, string>, roleMap: Map<string, DiscordRole>): Node[] {
   // 1. Split off code blocks and blockquotes first (block-level, no nesting)
   const nodes: Node[] = [];
   let rest = input;
@@ -343,7 +343,7 @@ function parseMarkdown(input: string, channelMap: Map<string, string>, roleMap: 
   return nodes;
 }
 
-function parseInline(text: string, channelMap: Map<string, string>, roleMap: Map<string, any>): Node[] {
+function parseInline(text: string, channelMap: Map<string, string>, roleMap: Map<string, DiscordRole>): Node[] {
   // Handle blockquotes and headers line by line
   const lines = text.split("\n");
   const result: Node[] = [];
@@ -412,7 +412,7 @@ function parseInline(text: string, channelMap: Map<string, string>, roleMap: Map
 }
 
 // parseSpans: handles inline markdown (bold, italic, code, mentions, emojis, links)
-function parseSpans(text: string, channelMap: Map<string, string>, roleMap: Map<string, any>): Node[] {
+function parseSpans(text: string, channelMap: Map<string, string>, roleMap: Map<string, DiscordRole>): Node[] {
   const nodes: Node[] = [];
 
   // Token pattern — order matters: longer/more specific first

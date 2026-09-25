@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { lazy, Suspense, useState, useRef } from "react";
 import type { DiscordMessage, DiscordChannel } from "@/types";
 import { Avatar } from "@/components/ui/Avatar";
 import { formatTimestamp, getDisplayName } from "@/lib/utils";
@@ -9,15 +9,18 @@ import { EmbedRenderer } from "./EmbedRenderer";
 import { PollRenderer } from "./PollRenderer";
 import { MessageComponentsRenderer } from "./MessageComponentsRenderer";
 import { MessageContextMenu } from "@/components/ui/MessageContextMenu";
-import { Reply, Paperclip, X, SmilePlus, Phone, Pin, BarChart3, Check, Play, Pause, Volume2, Mic } from "lucide-react";
-import EmojiPicker, { Theme, EmojiClickData, Categories } from "emoji-picker-react";
+import { Reply, Paperclip, SmilePlus, Phone, Pin, BarChart3, Check, Play, Pause } from "lucide-react";
+import type { EmojiClickData } from "emoji-picker-react";
 import * as Popover from "@radix-ui/react-popover";
 import { useMemo } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import * as ContextMenu from "@radix-ui/react-context-menu";
 import { OrganicMark } from "@/components/ui/OrganicMark";
 import { UserProfilePopover } from "@/components/profile/UserProfilePopover";
 import { DiscordEmojiPicker } from "./DiscordEmojiPicker";
+
+const EmojiPickerPanel = lazy(() =>
+  import("./EmojiPickerPanel").then((module) => ({ default: module.EmojiPickerPanel })),
+);
 
 interface Props {
   message: DiscordMessage;
@@ -54,9 +57,8 @@ export function MessageItem({ message, isGrouped, isOwn, onReply, onDelete, chan
   const handleEmojiReact = async (emojiData: EmojiClickData) => {
     let emojiStr = emojiData.emoji;
     if (emojiData.isCustom) {
-      const customEmoji = emojiData as any;
-      const emojiName = emojiData.names?.[0] || customEmoji.name || "emoji";
-      emojiStr = `${emojiName}:${emojiData.unified || customEmoji.id}`;
+      const emojiName = emojiData.names?.[0] || "emoji";
+      emojiStr = `${emojiName}:${emojiData.unified}`;
     }
     if (activeAccountId && activeChannelId) {
       await addReaction(activeAccountId, activeChannelId, message.id, emojiStr);
@@ -441,16 +443,15 @@ export function MessageItem({ message, isGrouped, isOwn, onReply, onDelete, chan
             </Popover.Trigger>
             <Popover.Portal>
               <Popover.Content side="top" align="end" sideOffset={10} style={{ zIndex: 100 }}>
-                <EmojiPicker
-                  onEmojiClick={handleEmojiReact}
-                  theme={Theme.DARK}
-                  lazyLoadEmojis={true}
-                  searchPlaceHolder="Pesquisar emoji..."
-                  customEmojis={customEmojis}
-                  categoryIcons={{
-                    [Categories.CUSTOM]: <OrganicMark size={16} />
-                  }}
-                />
+                <Suspense fallback={<div style={{ width: 350, height: 450 }} />}>
+                  <EmojiPickerPanel
+                    onEmojiClick={handleEmojiReact}
+                    lazyLoadEmojis={true}
+                    searchPlaceHolder="Pesquisar emoji..."
+                    customEmojis={customEmojis}
+                    customCategoryIcon={<OrganicMark size={16} />}
+                  />
+                </Suspense>
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
@@ -789,10 +790,13 @@ function ReactionList({
 }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
-      {reactions.map((r, i) => (
+      {reactions.map((r, i) => {
+        const emojiName = r.emoji.name ?? "emoji";
+        const emojiIdentifier = r.emoji.id ? `${emojiName}:${r.emoji.id}` : emojiName;
+        return (
         <div
           key={i}
-          onClick={() => onToggle(r.emoji.name, !!r.me)}
+          onClick={() => onToggle(emojiIdentifier, !!r.me)}
           style={{
             background: r.me ? "rgba(88,101,242,0.15)" : "var(--bg-secondary)",
             border: `1px solid ${r.me ? "rgba(88,101,242,0.4)" : "var(--border-subtle)"}`,
@@ -807,18 +811,18 @@ function ReactionList({
         >
           {r.emoji.id ? (
             <img
-              src={`https://cdn.discordapp.com/emojis/${r.emoji.id}.webp?size=20`}
-              alt={r.emoji.name}
+              src={`https://cdn.discordapp.com/emojis/${r.emoji.id}.${r.emoji.animated ? "gif" : "webp"}?size=20`}
+              alt={emojiName}
               style={{ width: 18, height: 18, verticalAlign: "middle" }}
             />
           ) : (
-            <span>{r.emoji.name}</span>
+            <span>{emojiName}</span>
           )}
           <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
             {r.count}
           </span>
         </div>
-      ))}
+      );})}
     </div>
   );
 }

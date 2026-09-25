@@ -4,12 +4,13 @@ import { useNavigationStore } from "@/stores/navigationStore";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { toast } from "@/components/ui/Toast";
 
-import type { DiscordMessage } from "@/types";
+import type { DiscordActionRow, DiscordMessage, DiscordMessageComponent } from "@/types";
 import { useDiscordStore } from "@/stores/discordStore";
+import { useExternalLinkStore } from "@/stores/externalLinkStore";
 import { sendInteraction } from "@/lib/tauri";
 
 interface ComponentProps {
-  components: any[];
+  components: DiscordActionRow[];
   message: DiscordMessage;
 }
 
@@ -21,7 +22,7 @@ export function MessageComponentsRenderer({ components, message }: ComponentProp
       {components.map((row, i) => (
         row.type === 1 ? (
           <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {row.components?.map((comp: any, j: number) => (
+            {row.components.map((comp, j) => (
               <MessageComponentItem key={j} comp={comp} message={message} />
             ))}
           </div>
@@ -31,7 +32,7 @@ export function MessageComponentsRenderer({ components, message }: ComponentProp
   );
 }
 
-function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMessage }) {
+function MessageComponentItem({ comp, message }: { comp: DiscordMessageComponent; message: DiscordMessage }) {
   const [hovered, setHovered] = useState(false);
 
   if (comp.type === 2) {
@@ -78,7 +79,10 @@ function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMe
           transition: "background 0.1s ease-in-out",
         }}
         onClick={async (e) => {
-          if (isInternalLink) {
+          if (isLink && comp.url && !isInternalLink) {
+            e.preventDefault();
+            useExternalLinkStore.getState().openExternalLink(comp.url);
+          } else if (isInternalLink) {
             e.preventDefault();
             useNavigationStore.getState().setActiveChannel(internalChannelId);
           } else if (!isLink) {
@@ -96,17 +100,17 @@ function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMe
             try {
               await sendInteraction(
                 activeAccount,
-                message.author.id, // application_id is usually author id
+                message.application_id ?? message.author.id,
                 activeChannel,
                 activeGuild ?? undefined,
                 message.id,
                 sessionId,
-                comp.custom_id,
+                comp.custom_id ?? "",
                 2, // component_type: button
               );
               toast.success("Interação enviada com sucesso!");
-            } catch (err: any) {
-              toast.error(err.toString());
+            } catch (err: unknown) {
+              toast.error(err instanceof Error ? err.message : String(err));
             }
           }
         }}
@@ -115,7 +119,7 @@ function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMe
         {comp.emoji && (
           <img
             src={`https://cdn.discordapp.com/emojis/${comp.emoji.id}.${comp.emoji.animated ? "gif" : "webp"}?size=16`}
-            alt={comp.emoji.name}
+            alt={comp.emoji.name ?? "emoji"}
             style={{ width: 16, height: 16, objectFit: "contain" }}
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
@@ -126,14 +130,6 @@ function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMe
         {isLink && !isInternalLink && <ExternalLink size={14} style={{ opacity: 0.8 }} />}
       </button>
     );
-
-    if (isLink && comp.url && !isInternalLink) {
-      return (
-        <a href={comp.url} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
-          {content}
-        </a>
-      );
-    }
 
     return content;
   }
@@ -188,7 +184,7 @@ function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMe
               overflowY: "auto",
             }}
           >
-            {comp.options?.map((opt: any, i: number) => (
+            {comp.options?.map((opt, i) => (
               <DropdownMenu.Item
                 key={i}
                 onSelect={async () => {
@@ -205,18 +201,18 @@ function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMe
                   try {
                     await sendInteraction(
                       activeAccount,
-                      message.author.id, // application_id is usually author id
+                      message.application_id ?? message.author.id,
                       activeChannel,
                       activeGuild ?? undefined,
                       message.id,
                       sessionId,
-                      comp.custom_id,
+                      comp.custom_id ?? "",
                       comp.type, // usually 3 for String Select
                       [opt.value]
                     );
                     toast.success("Opção enviada com sucesso!");
-                  } catch (err: any) {
-                    toast.error(err.toString());
+                  } catch (err: unknown) {
+                    toast.error(err instanceof Error ? err.message : String(err));
                   }
                 }}
                 style={{
@@ -235,7 +231,7 @@ function MessageComponentItem({ comp, message }: { comp: any; message: DiscordMe
                 {opt.emoji && (
                   <img
                     src={opt.emoji.id ? `https://cdn.discordapp.com/emojis/${opt.emoji.id}.${opt.emoji.animated ? "gif" : "webp"}?size=16` : undefined}
-                    alt={opt.emoji.name}
+                    alt={opt.emoji.name ?? "emoji"}
                     style={{ width: 16, height: 16, objectFit: "contain" }}
                     onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />

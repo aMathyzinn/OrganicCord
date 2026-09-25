@@ -38,7 +38,7 @@ export function SearchResultsSidebar({ accountId, guildId, channelId, query, onC
         
         if (res && res.messages) {
           // Discord returns an array of message groups
-          const matchedMessages: DiscordMessage[] = res.messages.map((group: any[]) => {
+          const matchedMessages: DiscordMessage[] = res.messages.map((group) => {
             // Find the actual matched message (hit: true) or fallback to the first
             return group.find(m => m.hit) || group[0];
           }).filter(Boolean);
@@ -47,9 +47,9 @@ export function SearchResultsSidebar({ accountId, guildId, channelId, query, onC
         } else {
           setResults([]);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!isMounted) return;
-        setError(err.toString());
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         if (isMounted) setLoading(false);
       }

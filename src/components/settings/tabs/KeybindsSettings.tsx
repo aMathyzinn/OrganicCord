@@ -1,5 +1,5 @@
 import React from "react";
-import { Keyboard } from "lucide-react";
+import { Info, Keyboard } from "lucide-react";
 
 export function KeybindsSettings() {
   return (
@@ -15,25 +15,12 @@ export function KeybindsSettings() {
             Controle o OrganicCord rapidamente
           </h3>
           <p style={{ fontSize: 14, color: "var(--text-muted)", maxWidth: 400 }}>
-            Configure atalhos globais para usar funções essenciais do aplicativo, mesmo enquanto estiver jogando ou em outra janela.
+            Estes atalhos funcionam enquanto a janela do OrganicCord está ativa.
           </p>
         </div>
-        <button
-          className="hover-bg-brand"
-          style={{
-            background: "var(--brand-500)",
-            color: "white",
-            border: "none",
-            borderRadius: "var(--radius-sm)",
-            padding: "8px 16px",
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: "pointer",
-            marginTop: 8
-          }}
-        >
-          Adicionar um Atalho
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+          <Info size={15} /> Atalhos globais personalizáveis ainda não estão disponíveis.
+        </div>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
@@ -45,8 +32,7 @@ export function KeybindsSettings() {
           {[
             { action: "Alternar Mudo (Mute)", bind: "Ctrl + Shift + M" },
             { action: "Alternar Fone (Deafen)", bind: "Ctrl + Shift + D" },
-            { action: "Pular para Servidor Acima", bind: "Alt + Seta para Cima" },
-            { action: "Pular para Servidor Abaixo", bind: "Alt + Seta para Baixo" },
+            { action: "Alternar modo furtivo", bind: "Ctrl + Shift + ." },
           ].map(shortcut => (
             <div key={shortcut.action} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--bg-secondary)", padding: "12px 16px", borderRadius: "var(--radius-sm)" }}>
               <span style={{ fontSize: 14, color: "var(--text-normal)", fontWeight: 500 }}>{shortcut.action}</span>

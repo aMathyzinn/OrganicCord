@@ -19,12 +19,11 @@ export function DiscordEmojiPicker({ accountId, onSelect, children }: Props) {
   const guilds = useDiscordStore((s) => s.cache.guilds[accountId] || []);
 
   const guildList = useMemo(() => {
-    console.log("[DiscordEmojiPicker] guildEmojisRaw keys:", Object.keys(guildEmojisRaw));
     return Object.keys(guildEmojisRaw).map(guildId => {
       const guild = guilds.find(g => g.id === guildId);
       const emojis = guildEmojisRaw[guildId] || [];
       const filtered = emojis.filter(e => {
-        const name = e.name || (Array.isArray((e as any).names) ? (e as any).names[0] : null);
+        const name = e.name;
         if (!name) return false;
         return name.toLowerCase().includes(search.toLowerCase());
       });
@@ -36,13 +35,6 @@ export function DiscordEmojiPicker({ accountId, onSelect, children }: Props) {
       };
     }).filter(g => g.emojis.length > 0);
   }, [guildEmojisRaw, guilds, search]);
-
-  console.log("[DiscordEmojiPicker] render:", { 
-    accountId, 
-    guildsCount: guilds.length, 
-    emojisCount: Object.keys(guildEmojisRaw).length,
-    guildListCount: guildList.length 
-  });
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -117,10 +109,7 @@ export function DiscordEmojiPicker({ accountId, onSelect, children }: Props) {
               {guildList.length === 0 ? (
                 <div style={{ textAlign: "center", color: "var(--text-muted)", fontSize: 13, marginTop: 40 }}>
                   Nenhum emoji encontrado.<br/><br/>
-                  <span style={{ fontSize: 10, opacity: 0.5 }}>
-                    Debug: {Object.keys(guildEmojisRaw).length} guilds in cache<br/>
-                    {guilds.length} guilds total
-                  </span>
+                  Tente outro termo ou verifique se a conta tem acesso a emojis de servidores.
                 </div>
               ) : (
                 guildList.map(g => (
@@ -139,11 +128,11 @@ export function DiscordEmojiPicker({ accountId, onSelect, children }: Props) {
                       {g.name}
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-                      {g.emojis.map((e: any) => {
-                        const emojiName = e.name || (Array.isArray(e.names) && e.names[0]) || "emoji";
-                        const isAnimated = typeof e.animated === 'boolean' ? e.animated : (e.imgUrl ? e.imgUrl.includes(".gif") : false);
-                        const emojiId = e.id || e.unified || "";
-                        const imgUrl = e.imgUrl || (emojiId ? `https://cdn.discordapp.com/emojis/${emojiId}.${isAnimated ? "gif" : "png"}` : "");
+                      {g.emojis.map((e) => {
+                        const emojiName = e.name || "emoji";
+                        const isAnimated = e.animated === true;
+                        const emojiId = e.id || "";
+                        const imgUrl = emojiId ? `https://cdn.discordapp.com/emojis/${emojiId}.${isAnimated ? "gif" : "png"}` : "";
 
                         return (
                           <button 

@@ -1,9 +1,10 @@
-use tauri::State;
 use serde::{Deserialize, Serialize};
+use tauri::State;
+use zeroize::Zeroizing;
 
-use crate::session::{SessionManager, AccountSession, SessionStatus, validate_token};
-use crate::storage;
 use crate::commands::account::load_accounts_from_store;
+use crate::session::{validate_token, AccountSession, SessionManager, SessionStatus};
+use crate::storage;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectPayload {
@@ -38,8 +39,10 @@ pub async fn connect_account(
         }
     }
 
-    let token = storage::decrypt_token(&account.token_encrypted)
-        .map_err(|e| format!("Erro de descriptografia: {}", e))?;
+    let token = Zeroizing::new(
+        storage::decrypt_token(&account.token_encrypted)
+            .map_err(|e| format!("Erro de descriptografia: {}", e))?,
+    );
 
     let session = AccountSession {
         account_id: account.id.clone(),
@@ -58,7 +61,9 @@ pub async fn connect_account(
     match validate_token(&token).await {
         Ok(()) => {
             state.update_status(&account.id, SessionStatus::Connected);
-            Ok(state.get_session(&account.id).unwrap())
+            state
+                .get_session(&account.id)
+                .ok_or_else(|| "A sessão validada não pôde ser recuperada.".to_string())
         }
         Err(reason) => {
             let err_msg = format!("Falha na conexão: {}", reason);

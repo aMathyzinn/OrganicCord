@@ -1,21 +1,19 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useAccountStore } from "@/stores/accountStore";
-import { useAiStore, makeDefaultConfig } from "@/stores/aiStore";
-import type { DmAiRule } from "@/stores/aiStore";
 import { MessageList } from "./MessageList";
 import { MessageInput, AttachmentData } from "./MessageInput";
 import { Avatar } from "@/components/ui/Avatar";
 import type { DiscordMessage } from "@/types";
-import type { AiConfig, AiProvider } from "@/stores/aiStore";
-import { DmAiFeature, processFreshMessagesForDmAi } from "@/components/ai/DmAiFeature";
-import * as api from "@/lib/tauri";
 import { ActiveCallArea } from "./ActiveCallArea";
-import { Bot, X, Phone, Video, Pin, Search } from "lucide-react";
+import { Phone, Video, Search } from "lucide-react";
 import { useVoiceStore } from "@/stores/voiceStore";
 import { PinnedMessagesPopover } from "./PinnedMessagesPopover";
 import { SearchResultsSidebar } from "./SearchResultsSidebar";
 import { TypingIndicator } from "./TypingIndicator";
+import { ChatDropOverlay } from "./ChatDropOverlay";
+import { toast } from "@/components/ui/Toast";
+import { getMessages } from "@/lib/tauri";
 
 interface Props {
   channelId: string;
@@ -26,11 +24,12 @@ export function DMArea({ channelId, accountId }: Props) {
   const { cache, loading, fetchMessages, fetchMoreMessages, sendMessage, fetchDMs, deleteMessage } =
     useDiscordStore();
   const { accounts } = useAccountStore();
-  const { dmRules } = useAiStore();
   const { joinCall, leaveCall, isConnecting, isConnected, channelId: voiceChannelId } = useVoiceStore();
   const [replyingTo, setReplyingTo] = useState<DiscordMessage | null>(null);
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
-  const seenDmIds = useRef<Set<string>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<AttachmentData | null>(null);
+  const dragCounterRef = useRef(0);
 
   const messages = cache.messages[channelId] ?? [];
   const isLoading = loading.messages[channelId];
@@ -39,8 +38,50 @@ export function DMArea({ channelId, accountId }: Props) {
   const dms = cache.dms[accountId] ?? [];
   const dm = dms.find((d) => d.id === channelId);
   const recipient = dm?.recipients?.[0];
+  const targetName = recipient?.global_name || recipient?.username || "DM";
 
-  const dmRule = dmRules.find((r: any) => r.account_id === accountId);
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      if (file.size > 25 * 1024 * 1024) {
+        toast.error("Arquivo maior que 25MB. Por favor use arquivos menores.");
+        return;
+      }
+      setPendingAttachment({ type: "file", file });
+      toast.success(`Arquivo "${file.name}" pronto para envio!`);
+    }
+  };
 
   // Initial load
   useEffect(() => {
@@ -48,74 +89,66 @@ export function DMArea({ channelId, accountId }: Props) {
     if (!cache.dms[accountId]) fetchDMs(accountId);
     useDiscordStore.getState().clearUnread(accountId, channelId);
     setSearchQuery(null);
+    setPendingAttachment(null);
   }, [channelId, accountId]);
 
-  // Seed seenDmIds with already loaded messages so we don't reply to old ones
-  useEffect(() => {
-    const msgs = cache.messages[channelId] ?? [];
-    for (const m of msgs) seenDmIds.current.add(m.id);
-  }, [channelId]);
-
-  // Polling: fetch new messages via `after` cursor, trigger DM AI reply on new ones
+  // Polling de contingência para recuperar eventos perdidos durante reconexões.
   useEffect(() => {
     const poll = async () => {
       const existing = useDiscordStore.getState().cache.messages[channelId];
       const newestReal = existing?.find((m) => !m.id.startsWith("local-"));
       if (!newestReal) return;
-
-      let fresh: DiscordMessage[];
       try {
-        fresh = await api.getMessages(accountId, channelId, undefined, newestReal.id);
-      } catch {
-        return;
+        const fresh = await getMessages(accountId, channelId, undefined, newestReal.id);
+        if (fresh.length === 0) return;
+
+        useDiscordStore.setState((s) => {
+          const cur = s.cache.messages[channelId] ?? [];
+          const realIds = new Set(cur.filter((m) => !m.id.startsWith("local-")).map((m) => m.id));
+          const toAdd = fresh.filter((m) => !realIds.has(m.id));
+          if (toAdd.length === 0) return s;
+
+          const freshFingerprints = new Set(fresh.map((m) => `${m.author.id}:${m.content.trim()}`));
+          const dedupedCur = cur.filter(
+            (m) => !m.id.startsWith("local-") || !freshFingerprints.has(`${m.author.id}:${m.content.trim()}`)
+          );
+          const sorted = [...toAdd].sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
+          return { cache: { ...s.cache, messages: { ...s.cache.messages, [channelId]: [...sorted, ...dedupedCur] } } };
+        });
+      } catch (e) {
+        console.warn("[DM poll] erro:", e);
       }
-      if (fresh.length === 0) return;
-
-      useDiscordStore.setState((s) => {
-        const cur = s.cache.messages[channelId] ?? [];
-        const realIds = new Set(cur.filter((m) => !m.id.startsWith("local-")).map((m) => m.id));
-        const toAdd = fresh.filter((m) => !realIds.has(m.id));
-        if (toAdd.length === 0) return s;
-        const freshFps = new Set(fresh.map((m) => `${m.author.id}:${m.content.trim()}`));
-        const deduped = cur.filter(
-          (m) => !m.id.startsWith("local-") || !freshFps.has(`${m.author.id}:${m.content.trim()}`)
-        );
-        const sorted = [...toAdd].sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
-        return { cache: { ...s.cache, messages: { ...s.cache.messages, [channelId]: [...sorted, ...deduped] } } };
-      });
-
-      // Trigger DM AI reply for new messages not from this account
-      processFreshMessagesForDmAi(accountId, channelId, account?.user_id, fresh, seenDmIds.current);
     };
 
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
-  }, [channelId, accountId, account?.user_id]);
+  }, [channelId, accountId]);
 
   const handleSend = useCallback(async (content: string, attachment?: AttachmentData) => {
     if (!accountId || !channelId) return;
+    const finalAttachment = attachment ?? pendingAttachment;
     try {
-      if (attachment) {
-        if (attachment.type === "file") {
-          const buffer = await attachment.file.arrayBuffer();
+      if (finalAttachment) {
+        if (finalAttachment.type === "file") {
+          const buffer = await finalAttachment.file.arrayBuffer();
           const data = new Uint8Array(buffer);
           await useDiscordStore.getState().sendMessageWithAttachment(
             accountId,
             channelId,
             content,
             replyingTo?.id,
-            attachment.file.name,
+            finalAttachment.file.name,
             undefined,
             data
           );
-        } else if (attachment.type === "path") {
+        } else if (finalAttachment.type === "handle") {
           await useDiscordStore.getState().sendMessageWithAttachment(
             accountId,
             channelId,
             content,
             replyingTo?.id,
-            attachment.name,
-            attachment.path,
+            finalAttachment.name,
+            finalAttachment.handle,
             undefined
           );
         }
@@ -123,13 +156,25 @@ export function DMArea({ channelId, accountId }: Props) {
         await sendMessage(accountId, channelId, content, replyingTo?.id);
       }
       setReplyingTo(null);
+      setPendingAttachment(null);
     } catch (e) {
       console.error("Failed to send message:", e);
     }
-  }, [accountId, channelId, replyingTo, sendMessage]);
+  }, [accountId, channelId, replyingTo, sendMessage, pendingAttachment]);
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg-primary)" }}>
+    <div
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg-primary)", position: "relative" }}
+    >
+      <ChatDropOverlay
+        isDragging={isDragging}
+        canUpload={true}
+        targetName={targetName}
+      />
       {/* Header */}
       <div
         style={{
@@ -238,8 +283,6 @@ export function DMArea({ channelId, accountId }: Props) {
             <Search size={14} color="var(--text-muted)" />
           </div>
 
-          {/* DM AI toggle */}
-          <DmAiFeature accountId={accountId} />
         </div>
       </div>
 
@@ -269,6 +312,7 @@ export function DMArea({ channelId, accountId }: Props) {
             onCancelReply={() => setReplyingTo(null)}
             onSend={handleSend}
             accountColor={account?.color}
+            externalAttachment={pendingAttachment}
           />
         </div>
 

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigationStore } from "@/stores/navigationStore";
-import { useDiscordStore } from "@/stores/discordStore";
+import { channelErrorKey, useDiscordStore } from "@/stores/discordStore";
 import { useVoiceStore } from "@/stores/voiceStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { ChannelContextMenu } from "@/components/ui/ChannelContextMenu";
 import type { DiscordChannel } from "@/types";
-import { Volume2, Drama, Megaphone, MessagesSquare, Search, X, ChevronRight, BellOff } from "lucide-react";
+import { Volume2, Drama, Megaphone, MessagesSquare, Search, X, ChevronRight, BellOff, Lock, RefreshCw } from "lucide-react";
 import { getGuildIconUrl, getInitials } from "@/lib/utils";
-import { VoicePanel } from "@/components/voice/VoicePanel";
+import { getChannelPermissions } from "@/lib/permissions";
 
 // Literal constants — avoids enum import issues at runtime
 const CT = {
@@ -32,13 +32,16 @@ interface Props {
 
 export function ChannelSidebar({ guildId }: Props) {
   const { activeAccountId, activeChannelId, setActiveChannel } = useNavigationStore();
-  const { joinCall } = useVoiceStore();
-  const { cache, loading, fetchChannels } = useDiscordStore();
+  const { cache, channelLoads, fetchChannels } = useDiscordStore();
   const { accounts } = useAccountStore();
 
-  const channels = cache.channels[guildId] ?? [];
-  const isLoading = loading.channels[guildId];
-  const fetchError = useDiscordStore((s) => s.errors[`channels-${guildId}`]);
+  const channels = activeAccountId ? (cache.channels[activeAccountId]?.[guildId] ?? []) : [];
+  const channelLoad = activeAccountId ? channelLoads[activeAccountId]?.[guildId] : undefined;
+  const isLoading = channelLoad?.status === "loading";
+  const isInitialLoading = isLoading && channels.length === 0;
+  const fetchError = useDiscordStore((s) => activeAccountId
+    ? s.errors[channelErrorKey(activeAccountId, guildId)]
+    : undefined);
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
   
   const unreads = activeAccountId ? (cache.unreads[activeAccountId] ?? {}) : {};
@@ -54,11 +57,13 @@ export function ChannelSidebar({ guildId }: Props) {
 
   useEffect(() => {
     if (activeAccountId && guildId) {
-      if (!cache.channels[guildId] || fetchError) {
-        fetchChannels(activeAccountId, guildId);
+      const load = useDiscordStore.getState().channelLoads[activeAccountId]?.[guildId];
+      const cached = useDiscordStore.getState().cache.channels[activeAccountId]?.[guildId];
+      if (!cached || !load || load.status === "idle" || load.status === "empty" || load.status === "error" || load.source === "gateway") {
+        void fetchChannels(activeAccountId, guildId);
       }
     }
-  }, [activeAccountId, guildId]);
+  }, [activeAccountId, guildId, fetchChannels]);
 
   const grouped = useMemo(() => {
     const filtered = query
@@ -211,16 +216,28 @@ export function ChannelSidebar({ guildId }: Props) {
 
       {/* Lista */}
       <div style={{ flex: 1, overflowY: "auto", padding: "4px 0 8px" }}>
-        {isLoading ? (
+        {isInitialLoading ? (
           <ChannelSkeletons />
-        ) : fetchError ? (
-          <ErrorState error={fetchError} onRetry={() => activeAccountId && fetchChannels(activeAccountId, guildId)} />
+        ) : fetchError && channels.length === 0 ? (
+          <ErrorState error={fetchError} onRetry={() => activeAccountId && void fetchChannels(activeAccountId, guildId, true)} />
         ) : query && grouped.uncategorized.length === 0 && grouped.cats.length === 0 ? (
           <div style={{ padding: "16px 12px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
             Nenhum canal encontrado para "{search.trim()}"
           </div>
+        ) : channels.length === 0 ? (
+          <EmptyChannelsState
+            refreshing={isLoading}
+            onRetry={() => activeAccountId && void fetchChannels(activeAccountId, guildId, true)}
+          />
         ) : (
           <>
+            {(isLoading || fetchError) && (
+              <ChannelRefreshNotice
+                error={fetchError}
+                refreshing={isLoading}
+                onRetry={() => activeAccountId && void fetchChannels(activeAccountId, guildId, true)}
+              />
+            )}
             {/* Canais sem categoria */}
             {grouped.uncategorized.map((ch) => {
               const unread = unreads[ch.id];
@@ -371,7 +388,6 @@ function CategoryGroup({
           })}
         </div>
       </div>
-      <VoicePanel />
     </div>
   );
 }
@@ -399,10 +415,26 @@ function ChannelRow({
   isUnread?: boolean;
   mentionCount?: number;
 }) {
+  const { activeAccountId, activeGuildId } = useNavigationStore();
+  const { cache } = useDiscordStore();
   const type = ctype(channel);
   const isVoice = type === CT.VOICE || type === CT.STAGE;
   const icon = channelIcon(type);
   const isMuted = useNotificationStore((s) => s.isChannelMuted(channel.id));
+
+  const guilds = activeAccountId ? (cache.guilds[activeAccountId] ?? []) : [];
+  const currentMember = activeAccountId && activeGuildId
+    ? cache.guildMembers[activeAccountId]?.[activeGuildId]
+    : undefined;
+  const currentUserId = useAccountStore
+    .getState()
+    .accounts.find((account) => account.id === activeAccountId)?.user_id;
+  const perms = getChannelPermissions(activeGuildId, guilds, false, {
+    channel,
+    memberRoleIds: currentMember?.roles,
+    currentUserId,
+  });
+  const isLocked = !perms.canView;
 
   return (
     <div>
@@ -450,6 +482,11 @@ function ChannelRow({
           >
             {channel.name ?? "canal"}
           </span>
+          {isLocked && (
+            <span title="Canal Privado" style={{ display: "inline-flex" }}>
+              <Lock size={12} style={{ color: "var(--text-muted)", flexShrink: 0, opacity: 0.6 }} />
+            </span>
+          )}
           {isMuted && (
             <BellOff size={13} style={{ color: "var(--text-muted)", flexShrink: 0, opacity: 0.7 }} />
           )}
@@ -554,6 +591,78 @@ function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) 
         Tentar novamente
       </button>
     </div>
+  );
+}
+
+function EmptyChannelsState({ refreshing, onRetry }: { refreshing: boolean; onRetry: () => void }) {
+  return (
+    <div style={{ padding: "24px 16px", textAlign: "center" }}>
+      <MessagesSquare size={24} style={{ color: "var(--text-muted)", marginBottom: 10 }} />
+      <p style={{ fontSize: 13, fontWeight: 650, color: "var(--text-normal)", marginBottom: 5 }}>
+        Nenhum canal disponível
+      </p>
+      <p style={{ fontSize: 12, lineHeight: 1.45, color: "var(--text-muted)", marginBottom: 12 }}>
+        O servidor pode estar temporariamente indisponível ou ainda não ter terminado de carregar.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={refreshing}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 9px",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: "var(--radius-sm)",
+          background: "var(--bg-tertiary)",
+          color: "var(--text-normal)",
+          fontSize: 12,
+          fontWeight: 650,
+        }}
+      >
+        <RefreshCw size={13} className={refreshing ? "channel-refresh-spin" : undefined} />
+        {refreshing ? "Carregando canais" : "Tentar novamente"}
+      </button>
+    </div>
+  );
+}
+
+function ChannelRefreshNotice({
+  error,
+  refreshing,
+  onRetry,
+}: {
+  error?: string;
+  refreshing: boolean;
+  onRetry: () => void;
+}) {
+  if (refreshing) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px 7px", color: "var(--text-muted)", fontSize: 11 }}>
+        <RefreshCw size={12} className="channel-refresh-spin" />
+        Atualizando canais
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onRetry}
+      title={error}
+      style={{
+        width: "100%",
+        padding: "6px 12px 8px",
+        border: 0,
+        background: "transparent",
+        color: "var(--text-warning)",
+        textAlign: "left",
+        fontSize: 11,
+      }}
+    >
+      Não foi possível atualizar. Tentar novamente
+    </button>
   );
 }
 

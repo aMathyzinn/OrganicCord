@@ -3,8 +3,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { useDiscordStore } from "@/stores/discordStore";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { toast } from "@/components/ui/Toast";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
+import type { DiscordMessage } from "@/types";
+
+interface NotificationNavigation {
+  accountId: string;
+  guildId?: string | null;
+  channelId: string;
+}
+
+function isNotificationNavigation(value: unknown): value is NotificationNavigation {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.accountId === "string" && typeof candidate.channelId === "string";
+}
 
 export async function initNotificationSystem() {
+  if (!useSettingsStore.getState().settings.desktopNotifications) return;
   try {
     let granted = await isPermissionGranted();
     if (!granted) {
@@ -17,12 +33,10 @@ export async function initNotificationSystem() {
 
   // Registra o ouvinte de clique nas notificações do sistema operacional
   try {
-    onAction((notificationOptions) => {
-      console.log("[Notifications] Notificação clicada:", notificationOptions);
-      const extra = notificationOptions.extra || (notificationOptions as any).notification?.extra;
-      if (extra) {
-        const { accountId, guildId, channelId } = extra as any;
-        if (accountId && channelId) {
+    await onAction((notificationOptions) => {
+      const extra = notificationOptions.extra;
+      if (isNotificationNavigation(extra)) {
+        const { accountId, guildId, channelId } = extra;
           // Foca a janela do aplicativo no OS
           invoke("focus_window").catch(() => {});
 
@@ -37,7 +51,6 @@ export async function initNotificationSystem() {
             nav.setView("dms");
           }
           nav.setActiveChannel(channelId);
-        }
       }
     });
   } catch (e) {
@@ -45,7 +58,8 @@ export async function initNotificationSystem() {
   }
 }
 
-export function triggerDesktopNotification(account_id: string, message: any, hasMention: boolean) {
+export function triggerDesktopNotification(account_id: string, message: DiscordMessage, hasMention: boolean) {
+  const settings = useSettingsStore.getState().settings;
   const store = useDiscordStore.getState();
   const authorName = message.author?.global_name || message.author?.username || "Alguém";
   
@@ -60,7 +74,7 @@ export function triggerDesktopNotification(account_id: string, message: any, has
   // Nome do Canal ou DM
   let channelName = "";
   if (message.guild_id) {
-    const channels = store.cache.channels[message.guild_id] || [];
+    const channels = store.cache.channels[account_id]?.[message.guild_id] || [];
     const channel = channels.find((c) => c.id === message.channel_id);
     channelName = channel?.name ? `#${channel.name}` : "canal";
   } else {
@@ -89,7 +103,7 @@ export function triggerDesktopNotification(account_id: string, message: any, has
 
   let body = rawContent.trim();
   if (!body && message.attachments?.length) {
-    const isImage = message.attachments.some((a: any) => a.content_type?.startsWith("image/"));
+    const isImage = message.attachments.some((attachment) => attachment.content_type?.startsWith("image/"));
     body = isImage ? "[Imagem enviada]" : "[Arquivo enviado]";
   } else if (!body) {
     body = "[Mensagem sem texto]";
@@ -100,20 +114,28 @@ export function triggerDesktopNotification(account_id: string, message: any, has
   }
 
   // Dispara notificação nativa da área de trabalho
-  try {
-    sendNotification({
-      title,
-      body,
-      icon: "32x32",
-      extra: {
-        accountId: account_id,
-        guildId: message.guild_id || null,
-        channelId: message.channel_id,
-        messageId: message.id,
-      },
+  if (settings.desktopNotifications) {
+    try {
+      sendNotification({
+        title,
+        body,
+        icon: "32x32",
+        extra: {
+          accountId: account_id,
+          guildId: message.guild_id || null,
+          channelId: message.channel_id,
+          messageId: message.id,
+        },
+      });
+    } catch (e) {
+      console.error("[Notifications] Erro ao enviar notificação de desktop:", e);
+    }
+  }
+
+  if (settings.flashTaskbar && !document.hasFocus()) {
+    void getCurrentWindow().requestUserAttention(UserAttentionType.Informational).catch((error) => {
+      console.warn("[Notifications] Não foi possível solicitar atenção:", error);
     });
-  } catch (e) {
-    console.error("[Notifications] Erro ao enviar notificação de desktop:", e);
   }
 
   // Toast in-app caso o usuário esteja com o app aberto e focado e receba uma menção
