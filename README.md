@@ -16,7 +16,7 @@ An open-source, lightweight, multi-account desktop client for Discord on Windows
 
 ## Beta status
 
-OrganicCord is currently published as [`v0.2.0-beta.1`](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1). The beta covers the core communication and voice flows, but it is not intended to match every feature of the official Discord client.
+OrganicCord is currently published as [`v0.2.0-beta.2`](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.2). The beta covers the core communication and voice flows, but it is not intended to match every feature of the official Discord client.
 
 | Available now | Not available yet |
 | --- | --- |
@@ -27,20 +27,20 @@ OrganicCord is currently published as [`v0.2.0-beta.1`](https://github.com/aMath
 
 ## Install on Windows
 
-1. Download `OrganicCord_0.2.0-beta.1_x64-setup.exe` from the [release page](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1).
+1. Download `OrganicCord_0.2.0-beta.2_x64-setup.exe` from the [release page](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.2).
 2. Run the installer on a Windows 10 or Windows 11 computer with WebView2 installed.
 3. Sign in and grant only the permissions required by the features you choose to use.
 
 The current installer is not code-signed yet. Windows may show an unknown publisher warning; verify that the file came from the official release and check its hash before installing. Do not disable Windows security features to run the app.
 
 ```powershell
-Get-FileHash .\OrganicCord_0.2.0-beta.1_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\OrganicCord_0.2.0-beta.2_x64-setup.exe -Algorithm SHA256
 ```
 
-`v0.2.0-beta.1` SHA-256:
+`v0.2.0-beta.2` SHA-256:
 
 ```text
-7876C6E32CB914414A215C1160EBD8DB1623CE54D436AF279C075884F3DCAEA6
+4C0628E533631F2338F68DE997014B2BB8840FBCCDD22D34C8DB4D9CF50DED52
 ```
 
 ## What you can do
