@@ -1,118 +1,127 @@
-# OrganicCord
+<h1>
+  <img src="src-tauri/icons/128x128.png" width="42" alt="OrganicCord logo" />
+  OrganicCord
+</h1>
 
-Cliente desktop open source, leve e multi-conta para Discord no Windows. O OrganicCord reúne os fluxos sociais essenciais — conversas, servidores, voz, presença e notificações — em uma experiência nativa construída com Tauri, Rust, React e TypeScript.
+An open-source, lightweight, multi-account desktop client for Discord on Windows. OrganicCord brings conversations, communities, voice, presence, and notifications into a focused native desktop experience built with Tauri, Rust, React, and TypeScript.
 
 > [!WARNING]
-> O OrganicCord é um cliente **não oficial**. O Discord não oferece uma API pública e suportada para clientes de usuário completos, portanto mudanças no serviço podem afetar o funcionamento do app. Não use o projeto para automação de contas, spam, coleta de dados ou self-bots. Para contas críticas, mantenha o cliente oficial do Discord como alternativa.
+> OrganicCord is an **unofficial** Discord client. Discord does not provide a public, supported API for complete user clients, so service changes can affect compatibility. Do not use this project for account automation, spam, data harvesting, or self-bots. Keep the official Discord client available for important accounts.
 
-## Status da versão
+<p align="center">
+  <img src="docs/assets/organiccord-friends-preview.png" alt="An anonymized OrganicCord Friends interface preview" width="100%" />
+</p>
 
-O projeto está na pré-release [`v0.2.0-beta.1`](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1). A Beta já cobre os fluxos centrais de comunicação e voz, mas não busca paridade total com o Discord oficial.
+*An anonymized preview of the OrganicCord Friends interface.*
 
-| Pronto para usar | Ainda em desenvolvimento |
+## Beta status
+
+OrganicCord is currently published as [`v0.2.0-beta.1`](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1). The beta covers the core communication and voice flows, but it is not intended to match every feature of the official Discord client.
+
+| Available now | Not available yet |
 | --- | --- |
-| Mensagens, DMs, servidores, amigos e presença | Vídeo em chamadas |
-| Chamadas de voz em DMs e canais de voz | Compartilhamento de tela / Go Live |
-| Anexos, reações, respostas, enquetes e fóruns | Discord Activities, soundboard e Stage Channels |
-| Notificações nativas, temas, atalhos e multi-conta | Atualizador automático e suporte oficial a Linux/macOS |
+| Messages, DMs, servers, friends, and presence | Video calls |
+| Voice calls in DMs and voice channels | Screen sharing / Go Live |
+| Attachments, reactions, replies, polls, and forums | Activities, soundboard, and Stage Channels |
+| Native notifications, themes, shortcuts, and multi-account sessions | Automatic updates and official Linux/macOS support |
 
-## Instalação no Windows
+## Install on Windows
 
-1. Baixe `OrganicCord_0.2.0-beta.1_x64-setup.exe` na [página de releases](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1).
-2. Execute o instalador em um computador com Windows 10 ou 11 e WebView2.
-3. Entre com a sua conta e conceda apenas as permissões necessárias para os recursos que escolher usar.
+1. Download `OrganicCord_0.2.0-beta.1_x64-setup.exe` from the [release page](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1).
+2. Run the installer on a Windows 10 or Windows 11 computer with WebView2 installed.
+3. Sign in and grant only the permissions required by the features you choose to use.
 
-O instalador atual ainda não possui assinatura de código. O Windows pode exibir um aviso de editor desconhecido; valide que o arquivo foi baixado da release oficial e confira o hash antes de instalar. Não desative proteções do Windows para executar o aplicativo.
+The current installer is not code-signed yet. Windows may show an unknown publisher warning; verify that the file came from the official release and check its hash before installing. Do not disable Windows security features to run the app.
 
 ```powershell
 Get-FileHash .\OrganicCord_0.2.0-beta.1_x64-setup.exe -Algorithm SHA256
 ```
 
-Hash da `v0.2.0-beta.1`:
+`v0.2.0-beta.1` SHA-256:
 
 ```text
 7876C6E32CB914414A215C1160EBD8DB1623CE54D436AF279C075884F3DCAEA6
 ```
 
-## O que você pode fazer
+## What you can do
 
-### Conversas e comunidades
+### Conversations and communities
 
-- usar várias contas no mesmo aplicativo e alternar entre elas rapidamente;
-- navegar por servidores, organizar servidores em pastas e acessar canais de texto, voz e fóruns;
-- enviar, responder, editar e apagar suas mensagens;
-- enviar arquivos, imagens e mensagens de voz;
-- usar emojis, reações, enquetes, mensagens fixadas, pesquisa e formatação Markdown;
-- conversar por DM, arquivar conversas, ver digitação, presença e perfis;
-- gerenciar amigos, bloquear usuários e criar convites de servidor quando tiver permissão.
+- Use multiple Discord accounts from one application and switch between them quickly.
+- Browse servers, organize them into folders, and access text, voice, and forum channels.
+- Send, reply to, edit, and delete your own messages.
+- Upload files and images, record voice messages, and view embeds.
+- Use emojis, reactions, polls, pinned messages, search, and Markdown formatting.
+- Chat through DMs, archive conversations, and view typing indicators, presence, and profiles.
+- Manage friends, block users, and create server invites when you have permission.
 
-### Voz
+### Voice
 
-- iniciar, receber, atender e recusar chamadas de voz em DMs;
-- entrar e sair de canais de voz de servidores;
-- escolher dispositivos de entrada e saída, testar o microfone e usar supressão de ruído RNNoise;
-- mutar o microfone, ensurdecer o áudio e acompanhar participantes e o estado da conexão.
+- Start, receive, answer, and decline direct-message voice calls.
+- Join and leave server voice channels.
+- Select audio input and output devices, test the microphone, and enable RNNoise suppression.
+- Mute, deafen, follow participants, and inspect the active connection state.
 
-O transporte de voz usa Opus e só considera a conexão pronta após negociar o gateway de voz, transporte criptografado e a proteção DAVE. A interface não deve ser tratada como prova isolada de que uma chamada está conectada.
+Voice transport uses Opus. A call is only treated as connected after the voice gateway, encrypted transport, and DAVE protection have completed their negotiation; a visible UI state alone is not proof of a working call.
 
-### Experiência no desktop
+### Desktop experience
 
-- receber notificações nativas do Windows, menções e indicadores de mensagens não lidas;
-- silenciar servidores, canais ou pessoas por período definido;
-- personalizar tema, contraste, densidade, tamanho de texto, ícone do app e atalhos;
-- atualizar avatar, bio e cor do perfil; banners dependem da elegibilidade da conta no Discord;
-- detectar jogos locais e publicar Rich Presence por meio do Discord Desktop aberto.
+- Receive native Windows notifications, mention alerts, and unread indicators.
+- Mute servers, channels, or users for a chosen duration.
+- Customize themes, contrast, density, message size, app icon, and keyboard shortcuts.
+- Update your avatar, bio, and profile color. Image banners remain subject to Discord account eligibility.
+- Detect local games and publish Rich Presence through an open Discord Desktop client.
 
-## Arquitetura
+## Technical architecture
 
 ```text
 React + TypeScript + Zustand
-        │ interface e estado local
+        │ UI and local state
         ▼
-Tauri 2 — comandos e eventos tipados
+Tauri 2 — typed commands and events
         │
-Rust — sessão, REST, Gateway, permissões, voz e arquivos
+Rust — sessions, REST, Gateway, permissions, voice, and files
         │
 Discord API v10 · Gateway · Voice Gateway
 ```
 
-| Camada | Responsabilidade |
+| Layer | Responsibility |
 | --- | --- |
-| React + Zustand | Interface, navegação, cache de mensagens e estado de chamadas. |
-| Tauri | Ponte tipada entre a interface e os recursos nativos do Windows. |
-| Rust | Sessões, REST, Gateway, rate limits, permissões, áudio e manipulação de anexos. |
-| Gateway v10 | Eventos em tempo real, heartbeat, reconexão e retomada de sessão. |
-| Voz | Opus, dispositivos de áudio, RTP criptografado e negociação DAVE com comportamento fail-closed. |
+| React + Zustand | Interface, navigation, message cache, and call state. |
+| Tauri | Typed bridge between the frontend and native Windows capabilities. |
+| Rust | Sessions, REST, Gateway handling, rate limits, permissions, audio, and attachment handling. |
+| Gateway v10 | Real-time events, heartbeats, reconnection, and session resume. |
+| Voice | Opus, audio devices, encrypted RTP transport, and fail-closed DAVE negotiation. |
 
-As permissões são calculadas considerando servidor, cargos, membro e sobreposições de canal. Limites de requisição são controlados por rota e há tratamento separado para limite global.
+Permissions are evaluated across server, role, member, and channel overrides. Request limits are coordinated per route, with separate handling for global rate limits.
 
-## Segurança e privacidade
+## Security and privacy
 
-- O frontend não recebe nem armazena tokens de conta.
-- Credenciais locais são criptografadas; a chave fica protegida pelo sistema operacional.
-- Anexos selecionados no Windows viram identificadores temporários e opacos, com validade e tamanho limitados, antes de serem enviados.
-- A Content Security Policy restringe origens de script, conexão, mídia e navegação embutida.
-- Links externos passam por validação e confirmação antes de abrir no navegador padrão.
+- The frontend does not receive or persist Discord account tokens.
+- Local credentials are encrypted, with keys protected by the operating system.
+- Files selected in Windows become opaque, temporary identifiers with expiration and size limits before they are uploaded.
+- The Content Security Policy restricts script, connection, media, and embedded-navigation origins.
+- External links are validated and require confirmation before the default browser is opened.
 
-Essas medidas reduzem a superfície de ataque, mas não eliminam os riscos inerentes a um cliente não oficial. Consulte a [Política de Segurança](SECURITY.md) para reportar vulnerabilidades.
+These measures reduce the attack surface, but do not eliminate the risks inherent to an unofficial client. Read the [Security Policy](SECURITY.md) to report vulnerabilities.
 
-## Desenvolvimento
+## Development
 
-### Requisitos
+### Requirements
 
-- Windows 10 ou 11 com WebView2;
+- Windows 10 or 11 with WebView2;
 - Node.js 24 (`>=24 <25`);
-- Rust `1.89.0` MSVC, fixado em [`rust-toolchain`](rust-toolchain);
-- ferramentas de compilação C++ do Visual Studio para o backend de áudio.
+- Rust `1.89.0` MSVC, pinned in [`rust-toolchain`](rust-toolchain);
+- Visual Studio C++ Build Tools for the audio backend.
 
-### Executar localmente
+### Run locally
 
 ```bash
 npm ci
 npm run tauri:dev
 ```
 
-### Validar o projeto
+### Validate the project
 
 ```bash
 npm run type-check
@@ -127,25 +136,25 @@ cargo test --all-targets
 cargo audit
 ```
 
-### Gerar um instalador NSIS local
+### Build a local NSIS installer
 
 ```powershell
 $env:CARGO_TARGET_DIR = "$PWD\src-tauri\target-installer"
 npm run tauri:build -- --bundles nsis
 ```
 
-Usar um diretório de build isolado evita conflito com uma instância do OrganicCord já aberta. Todo instalador deve ser verificado por versão, data e SHA-256 antes de distribuição.
+Using an isolated build directory avoids conflicts with an already-running OrganicCord instance. Always verify an installer by version, timestamp, and SHA-256 before distributing it.
 
-## Documentação e contribuição
+## Documentation and contributing
 
-- [Contribuindo](CONTRIBUTING.md)
-- [Política de Segurança](SECURITY.md)
-- [Checklist de lançamento](RELEASE_CHECKLIST.md)
-- [Repositório oficial](https://github.com/aMathyzinn/OrganicCord)
-- [Portfólio do criador](https://damodara.xyz)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Release checklist](RELEASE_CHECKLIST.md)
+- [Official repository](https://github.com/aMathyzinn/OrganicCord)
+- [Creator portfolio](https://damodara.xyz)
 
-Mudanças de protocolo devem apontar para documentação oficial quando ela existir, incluir testes e evitar alegar compatibilidade sem evidência real de transporte, criptografia e mídia.
+Protocol changes should reference official documentation whenever available, include tests, and avoid compatibility claims without real transport, encryption, and media evidence.
 
-## Licença
+## License
 
-OrganicCord é distribuído sob a licença MIT. A cópia adaptada de [`hpke-rs`](src-tauri/vendor/hpke-rs) permanece sob MPL-2.0; consulte o [`PATCH.md`](src-tauri/vendor/hpke-rs/PATCH.md) do componente.
+OrganicCord is released under the MIT License. The adapted copy of [`hpke-rs`](src-tauri/vendor/hpke-rs) remains under MPL-2.0; see its [`PATCH.md`](src-tauri/vendor/hpke-rs/PATCH.md).
