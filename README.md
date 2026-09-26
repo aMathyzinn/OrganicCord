@@ -1,56 +1,125 @@
-# OrganicCord 0.2.0-beta.1
+# OrganicCord
 
-Cliente desktop open source, multi-conta e não oficial para Discord, construído com Tauri, Rust, React e TypeScript.
+Cliente desktop open source, leve e multi-conta para Discord no Windows. O OrganicCord reúne os fluxos sociais essenciais — conversas, servidores, voz, presença e notificações — em uma experiência nativa construída com Tauri, Rust, React e TypeScript.
 
-> [!IMPORTANT]
-> O Discord não oferece uma API pública e suportada para construir um cliente de usuário completo. O OrganicCord usa superfícies destinadas ao cliente oficial e pode parar de funcionar após mudanças do Discord. Não use o projeto para automação de contas, spam, coleta de dados ou self-bots. Para contas importantes, prefira o cliente oficial.
+> [!WARNING]
+> O OrganicCord é um cliente **não oficial**. O Discord não oferece uma API pública e suportada para clientes de usuário completos, portanto mudanças no serviço podem afetar o funcionamento do app. Não use o projeto para automação de contas, spam, coleta de dados ou self-bots. Para contas críticas, mantenha o cliente oficial do Discord como alternativa.
 
-## Estado da Beta
+## Status da versão
 
-Esta versão inicia a transição da Alpha para a Beta. Ela já inclui:
+O projeto está na pré-release [`v0.2.0-beta.1`](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1). A Beta já cobre os fluxos centrais de comunicação e voz, mas não busca paridade total com o Discord oficial.
 
-- sessões locais multi-conta, com tokens criptografados e chave protegida pelo sistema operacional;
-- servidores, canais, mensagens, DMs, respostas, anexos, reações, digitação e presença;
-- Gateway v10 com heartbeat, reconexão, retomada de sessão e tratamento de eventos em tempo real;
-- permissões calculadas com sobreposições de servidor, cargo, membro e canal;
-- chamadas de voz com Opus, entrada/saída selecionável, mute, deafen e DAVE fail-closed;
-- notificações nativas, atalhos configuráveis e configurações de voz funcionais;
-- detecção local de jogos e Rich Presence pela conta aberta no Discord Desktop;
-- limites de requisição por rota/bucet e tratamento de limite global;
-- CSP restritiva e envio de anexos por identificadores nativos temporários, sem expor caminhos arbitrários ao frontend.
+| Pronto para usar | Ainda em desenvolvimento |
+| --- | --- |
+| Mensagens, DMs, servidores, amigos e presença | Vídeo em chamadas |
+| Chamadas de voz em DMs e canais de voz | Compartilhamento de tela / Go Live |
+| Anexos, reações, respostas, enquetes e fóruns | Discord Activities, soundboard e Stage Channels |
+| Notificações nativas, temas, atalhos e multi-conta | Atualizador automático e suporte oficial a Linux/macOS |
 
-Ainda não fazem parte do escopo desta Beta:
+## Instalação no Windows
 
-- vídeo remoto, compartilhamento de tela, Discord Activities embutidas, soundboard e Stage Channels;
-- paridade total com o Discord oficial;
-- suporte oficial a Linux e macOS;
-- atualizador automático e distribuição pública assinada;
-- garantia de compatibilidade futura com APIs privadas do Discord.
+1. Baixe `OrganicCord_0.2.0-beta.1_x64-setup.exe` na [página de releases](https://github.com/aMathyzinn/OrganicCord/releases/tag/v0.2.0-beta.1).
+2. Execute o instalador em um computador com Windows 10 ou 11 e WebView2.
+3. Entre com a sua conta e conceda apenas as permissões necessárias para os recursos que escolher usar.
 
-O transporte de voz e o DAVE possuem testes automatizados, mas uma versão pública ainda exige a matriz manual descrita em [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md), incluindo testes reais entre diferentes contas, redes e dispositivos.
+O instalador atual ainda não possui assinatura de código. O Windows pode exibir um aviso de editor desconhecido; valide que o arquivo foi baixado da release oficial e confira o hash antes de instalar. Não desative proteções do Windows para executar o aplicativo.
 
-## Requisitos
+```powershell
+Get-FileHash .\OrganicCord_0.2.0-beta.1_x64-setup.exe -Algorithm SHA256
+```
 
-- Windows 10 ou 11 com WebView2;
-- Node.js 24;
-- Rust 1.89.0 MSVC, fixado em `rust-toolchain`;
-- ferramentas de compilação C++ do Visual Studio para o backend de áudio.
+Hash da `v0.2.0-beta.1`:
+
+```text
+7876C6E32CB914414A215C1160EBD8DB1623CE54D436AF279C075884F3DCAEA6
+```
+
+## O que você pode fazer
+
+### Conversas e comunidades
+
+- usar várias contas no mesmo aplicativo e alternar entre elas rapidamente;
+- navegar por servidores, organizar servidores em pastas e acessar canais de texto, voz e fóruns;
+- enviar, responder, editar e apagar suas mensagens;
+- enviar arquivos, imagens e mensagens de voz;
+- usar emojis, reações, enquetes, mensagens fixadas, pesquisa e formatação Markdown;
+- conversar por DM, arquivar conversas, ver digitação, presença e perfis;
+- gerenciar amigos, bloquear usuários e criar convites de servidor quando tiver permissão.
+
+### Voz
+
+- iniciar, receber, atender e recusar chamadas de voz em DMs;
+- entrar e sair de canais de voz de servidores;
+- escolher dispositivos de entrada e saída, testar o microfone e usar supressão de ruído RNNoise;
+- mutar o microfone, ensurdecer o áudio e acompanhar participantes e o estado da conexão.
+
+O transporte de voz usa Opus e só considera a conexão pronta após negociar o gateway de voz, transporte criptografado e a proteção DAVE. A interface não deve ser tratada como prova isolada de que uma chamada está conectada.
+
+### Experiência no desktop
+
+- receber notificações nativas do Windows, menções e indicadores de mensagens não lidas;
+- silenciar servidores, canais ou pessoas por período definido;
+- personalizar tema, contraste, densidade, tamanho de texto, ícone do app e atalhos;
+- atualizar avatar, bio e cor do perfil; banners dependem da elegibilidade da conta no Discord;
+- detectar jogos locais e publicar Rich Presence por meio do Discord Desktop aberto.
+
+## Arquitetura
+
+```text
+React + TypeScript + Zustand
+        │ interface e estado local
+        ▼
+Tauri 2 — comandos e eventos tipados
+        │
+Rust — sessão, REST, Gateway, permissões, voz e arquivos
+        │
+Discord API v10 · Gateway · Voice Gateway
+```
+
+| Camada | Responsabilidade |
+| --- | --- |
+| React + Zustand | Interface, navegação, cache de mensagens e estado de chamadas. |
+| Tauri | Ponte tipada entre a interface e os recursos nativos do Windows. |
+| Rust | Sessões, REST, Gateway, rate limits, permissões, áudio e manipulação de anexos. |
+| Gateway v10 | Eventos em tempo real, heartbeat, reconexão e retomada de sessão. |
+| Voz | Opus, dispositivos de áudio, RTP criptografado e negociação DAVE com comportamento fail-closed. |
+
+As permissões são calculadas considerando servidor, cargos, membro e sobreposições de canal. Limites de requisição são controlados por rota e há tratamento separado para limite global.
+
+## Segurança e privacidade
+
+- O frontend não recebe nem armazena tokens de conta.
+- Credenciais locais são criptografadas; a chave fica protegida pelo sistema operacional.
+- Anexos selecionados no Windows viram identificadores temporários e opacos, com validade e tamanho limitados, antes de serem enviados.
+- A Content Security Policy restringe origens de script, conexão, mídia e navegação embutida.
+- Links externos passam por validação e confirmação antes de abrir no navegador padrão.
+
+Essas medidas reduzem a superfície de ataque, mas não eliminam os riscos inerentes a um cliente não oficial. Consulte a [Política de Segurança](SECURITY.md) para reportar vulnerabilidades.
 
 ## Desenvolvimento
+
+### Requisitos
+
+- Windows 10 ou 11 com WebView2;
+- Node.js 24 (`>=24 <25`);
+- Rust `1.89.0` MSVC, fixado em [`rust-toolchain`](rust-toolchain);
+- ferramentas de compilação C++ do Visual Studio para o backend de áudio.
+
+### Executar localmente
 
 ```bash
 npm ci
 npm run tauri:dev
 ```
 
-Validação local completa:
+### Validar o projeto
 
 ```bash
-npm audit
-npm run lint
 npm run type-check
+npm run lint
 npm test
 npm run build
+
 cd src-tauri
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
@@ -58,32 +127,25 @@ cargo test --all-targets
 cargo audit
 ```
 
-Gerar um instalador local não assinado:
+### Gerar um instalador NSIS local
 
-```bash
-npm run tauri:build
+```powershell
+$env:CARGO_TARGET_DIR = "$PWD\src-tauri\target-installer"
+npm run tauri:build -- --bundles nsis
 ```
 
-Não publique esse artefato como release oficial. A distribuição pública precisa cumprir os requisitos de assinatura, integridade e instalação limpa do [checklist de lançamento](RELEASE_CHECKLIST.md).
+Usar um diretório de build isolado evita conflito com uma instância do OrganicCord já aberta. Todo instalador deve ser verificado por versão, data e SHA-256 antes de distribuição.
 
-## Arquitetura e segurança
+## Documentação e contribuição
 
-```text
-React + Zustand
-      │ comandos/eventos tipados do Tauri
-Rust: sessão, Gateway, REST, permissões, voz e anexos
-      │
-Discord API v10 / Gateway / Voice
-```
+- [Contribuindo](CONTRIBUTING.md)
+- [Política de Segurança](SECURITY.md)
+- [Checklist de lançamento](RELEASE_CHECKLIST.md)
+- [Repositório oficial](https://github.com/aMathyzinn/OrganicCord)
+- [Portfólio do criador](https://damodara.xyz)
 
-O frontend não recebe nem persiste tokens. O backend recupera a credencial apenas quando necessário, mantém os segredos fora dos eventos enviados à interface e apaga buffers sensíveis quando possível. Arquivos selecionados pelo usuário viram identificadores opacos, com tamanho máximo e expiração, antes do envio.
-
-Isso reduz a superfície de ataque, mas não elimina o risco de usar uma conta em um cliente não oficial. Vulnerabilidades devem ser reportadas conforme [SECURITY.md](SECURITY.md).
-
-## Contribuição
-
-Leia [CONTRIBUTING.md](CONTRIBUTING.md). Mudanças de protocolo devem apontar para documentação oficial quando ela existir, incluir testes e evitar afirmar compatibilidade sem validação real.
+Mudanças de protocolo devem apontar para documentação oficial quando ela existir, incluir testes e evitar alegar compatibilidade sem evidência real de transporte, criptografia e mídia.
 
 ## Licença
 
-OrganicCord é distribuído sob a licença MIT. A cópia adaptada de `hpke-rs` em `src-tauri/vendor/hpke-rs` permanece sob MPL-2.0; consulte o arquivo `PATCH.md` desse diretório.
+OrganicCord é distribuído sob a licença MIT. A cópia adaptada de [`hpke-rs`](src-tauri/vendor/hpke-rs) permanece sob MPL-2.0; consulte o [`PATCH.md`](src-tauri/vendor/hpke-rs/PATCH.md) do componente.
