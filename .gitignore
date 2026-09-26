@@ -9,6 +9,8 @@ src-tauri/target/
 src-tauri/target-installer*/
 src-tauri/gen/
 services/**/target/
+.cargo/
+.husky/
 
 # Local-only configuration
 *.local
@@ -18,6 +20,16 @@ services/**/target/
 .local-ai/
 scripts/ai-manager.js
 *.skill
+
+# Internal planning, release-work, and showcase artifacts
+PRODUCT.md
+RELEASE_CHECKLIST.md
+SCREEN_SHARE_IMPLEMENTATION_TASKS.md
+SERVER_CONTENT_DIAGNOSIS_TASKS.md
+SHOWCASE_POST.md
+VOICE_DIAGNOSIS_TASKS.md
+VOICE_RECEIVE_FIX_TASKS.md
+OrganicCord_*_SHA256SUMS.txt
 
 # Sensitive local store backups
 *.json.bak

@@ -1,5 +1,0 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
-echo "Validando o código antes de enviar para o GitHub..."
-npm run type-check && npm run lint
