@@ -8,6 +8,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { useVoiceStore } from "@/stores/voiceStore";
 import { useGameActivityStore } from "@/stores/gameActivityStore";
+import { shouldShowIncomingDmCall } from "@/lib/callState";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { AddAccountModal } from "@/components/auth/AddAccountModal";
 import { WelcomeHub } from "@/components/auth/WelcomeHub";
@@ -262,14 +263,18 @@ export default function App() {
         case "CALL_CREATE": {
           if (data.channel_id) {
             const ringing = Array.isArray(data.ringing) ? (data.ringing as string[]) : [];
-            const isRingingForMe = ringing.includes(currentUserId ?? "");
             const dm = store.cache.dms[account_id]?.find((d) => d.id === data.channel_id);
             const callerUser = dm?.recipients?.find((u) => u.id !== currentUserId) ?? dm?.recipients?.[0];
             const voiceStates = Array.isArray(data.voice_states) ? data.voice_states : [];
             const callerId = callerUser?.id ?? voiceStates.find((vs) => vs.user_id !== currentUserId)?.user_id ?? "";
+            const activeCall = useVoiceStore.getState();
 
-            // Se está tocando para mim ou a chamada partiu de outro usuário na DM
-            if ((isRingingForMe || (callerUser && callerUser.id !== currentUserId)) && callerId !== currentUserId) {
+            if (shouldShowIncomingDmCall({
+              currentUserId,
+              ringingUserIds: ringing,
+              activeCallChannelId: activeCall.channelId,
+              channelId: data.channel_id,
+            }) && callerId !== currentUserId) {
               useVoiceStore.getState().setIncomingCall({
                 accountId: account_id,
                 channelId: data.channel_id,
@@ -281,7 +286,6 @@ export default function App() {
             }
 
             // Sincroniza estado da chamada ativa caso seja o canal atual
-            const activeCall = useVoiceStore.getState();
             if (activeCall.channelId === data.channel_id) {
               activeCall.handleCallUpdate(data.channel_id, voiceStates, ringing);
             }
